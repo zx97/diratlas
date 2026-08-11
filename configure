@@ -1,0 +1,94 @@
+#!/bin/sh
+# DirAtlas configure script
+# Detects OpenLDAP and runs cmake with appropriate flags.
+#
+# Usage:
+#   ./configure                     # auto-detect OpenLDAP
+#   ./configure --with-ldap=PATH    # specify OpenLDAP install prefix
+#   ./configure --help              # full help
+
+set -e
+
+usage() {
+    cat <<EOF
+Usage: $0 [OPTIONS]
+
+Options:
+  --with-ldap=PATH      Path to OpenLDAP installation (prefix)
+  --ldap-include-dir=P  Path to directory containing ldap.h
+  --ldap-lib-dir=P      Path to directory containing libldap.so
+  --prefix=PATH         Install prefix for 'make install' (default: /usr/local)
+  --help                Show this help
+
+Environment variables:
+  LDAP_ROOT             Same as --with-ldap
+
+If no LDAP flags are given, the script probes common locations.
+EOF
+    exit 0
+}
+
+LDAP_ROOT=""
+LDAP_INCLUDE_DIR=""
+LDAP_LIB_DIR=""
+PREFIX="/usr/local"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --with-ldap=*)
+            LDAP_ROOT="${1#*=}"
+            shift
+            ;;
+        --ldap-include-dir=*)
+            LDAP_INCLUDE_DIR="${1#*=}"
+            shift
+            ;;
+        --ldap-lib-dir=*)
+            LDAP_LIB_DIR="${1#*=}"
+            shift
+            ;;
+        --prefix=*)
+            PREFIX="${1#*=}"
+            shift
+            ;;
+        --help|-h)
+            usage
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Try '$0 --help' for more information."
+            exit 1
+            ;;
+    esac
+done
+
+if [ -z "$LDAP_ROOT" ] && [ -n "$LDAP_ROOT_ENV" ]; then
+    LDAP_ROOT="$LDAP_ROOT_ENV"
+fi
+
+CMAKE_ARGS="-DCMAKE_INSTALL_PREFIX=$PREFIX"
+
+if [ -n "$LDAP_INCLUDE_DIR" ]; then
+    CMAKE_ARGS="$CMAKE_ARGS -DLDAP_INCLUDE_DIR=$LDAP_INCLUDE_DIR"
+elif [ -n "$LDAP_ROOT" ]; then
+    CMAKE_ARGS="$CMAKE_ARGS -DLDAP_ROOT=$LDAP_ROOT"
+fi
+
+if [ -n "$LDAP_LIB_DIR" ]; then
+    CMAKE_ARGS="$CMAKE_ARGS -DLDAP_LIB_DIR=$LDAP_LIB_DIR"
+fi
+
+echo "DirAtlas configure"
+echo "  Install prefix: $PREFIX"
+echo "  LDAP root:      ${LDAP_ROOT:-auto-detect}"
+echo "  LDAP include:   ${LDAP_INCLUDE_DIR:-auto-detect}"
+echo "  LDAP lib:       ${LDAP_LIB_DIR:-auto-detect}"
+echo ""
+
+mkdir -p build
+cd build
+cmake .. $CMAKE_ARGS
+cd ..
+
+echo ""
+echo "Configuration done. Run 'make' to build."

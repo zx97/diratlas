@@ -1,0 +1,40 @@
+# Build directory
+build/
+
+# CMake files
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# Compiled objects and binaries
+*.o
+*.so
+*.a
+*.dylib
+diratlas
+
+# IDE and editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.sublime-*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Debug logs
+*.log
+
+# ldaprc local overrides (private)
+.ldaprc
+
+# Local agent/editor state
+.opencode/
+.omo/
