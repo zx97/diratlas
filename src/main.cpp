@@ -484,16 +484,47 @@ KEYBOARD
   ↑ ↓              Navigate tree / scroll attributes
   → / +            Expand tree node
   ← / -            Collapse tree node
-  Enter            Select node (load attrs) / expand collapse
+  Enter            Select node (load attrs); moves focus to the
+                   attributes panel so F2 edit works immediately
+  g                Jump the tree back to the RootDSE
   /                Tree: focus filter bar with search base
                    Attrs: enter search-in-value mode
+  h, H, ?          Show the keyboard help popup
   PgUp / PgDn      Jump 10 lines
   r                Refresh subtree
   F1..F8, F11/F12  Open menus (File / Edit / Settings)
   F9 / F10         Previous / next theme
   F2               Attrs panel: enter inline edit mode
-  Esc              Cancel background operation / close menu
+  Esc              Cancel background operation / close menu / leave edit
   q                Quit
+
+  Function keys are recognised in several terminal encodings:
+  SS3 (\EO..), CSI (\E[n~) and Konsole (\E[[A-L), so they work
+  under PuTTY, xterm and Konsole without configuration.
+
+───────────────────────────────────────────────────────────────
+TUI OPERATIONS (background threads)
+
+  Every LDAP operation that can block (loading a subtree, fetching
+  an entry, CRUD writes, LDIF export) runs on a dedicated worker
+  thread, never on the UI thread.  The ncurses loop stays
+  responsive and Esc cancels the running operation.
+
+  main loop (UI)                    worker_ thread (LDAP)
+  ─────────────                     ───────────────────
+  getch() ─► handleKey()
+      │                                │
+      │  loadChildren / searchOne      │
+      │  write op / export             ▼
+      │  ──────────────────────────► conn_.search(...)
+      ▼                                │
+  pendingUpdate_ / pendingLog_  ◄──────┘  result
+      │
+      ▼
+  draw()
+
+  If an operation takes longer than ~1s, a "Operation in progress"
+  popup appears with the current task and an "(Esc to cancel)" hint.
 
 ───────────────────────────────────────────────────────────────
 EDITING (CRUD)
@@ -537,12 +568,25 @@ ATTRIBUTES PANEL
 ───────────────────────────────────────────────────────────────
 TREE PANEL
 
-  • RootDSE (empty DN) as root
-  • All namingContexts + configContext + monitorContext +
-    subschemaSubentry listed as children
+  • Without -b: the tree root is the RootDSE (empty DN); its
+    namingContexts + configContext + monitorContext +
+    subschemaSubentry are listed as children.
+  • With -b <base>: the tree root is the search base itself, and
+    its children are loaded with a onelevel search.  Press g to
+    jump back to the RootDSE at any time.
   • Each context verified accessible before appearing
   • Filter (/ to focus bar): search results shown as virtual
     children, replaced on next search
+
+───────────────────────────────────────────────────────────────
+BANNER
+
+  On startup the colour banner picks one of 8 gradient palettes at
+  random (green, blue, cyan, magenta, orange, red, emerald,
+  lavender).  Colour is used only when the terminal supports it
+  (TTY + TERM != dumb + no NO_COLOR); otherwise a plain banner is
+  shown.  It appears on TUI exit, --help and --version, and is
+  kept off the CLI LDIF output.
 
 ───────────────────────────────────────────────────────────────
 EMOJIS
@@ -551,6 +595,17 @@ EMOJIS
   🌐 domain  🔗 domainDNS  ⚙️ GPO/config
   📊 monitor sections  🔌 Connections  🧵 Threads  🕐 Time  …
   📖 subschema  🗄️ Database  🏗️ Backend
+
+───────────────────────────────────────────────────────────────
+LICENSE
+
+  DirAtlas is free software distributed under the GNU Affero
+  General Public License v3.0 or later (AGPL-3.0-or-later).
+  Copyright (c) 2026 Manuel FLURY.
+
+  You may redistribute it and/or modify it under the terms of the
+  AGPL-3.0.  A copy of the full license text is embedded in the
+  binary; run `diratlas license` to print it.
 
 ───────────────────────────────────────────────────────────────
 EXAMPLES (by option)
