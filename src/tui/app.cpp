@@ -15,6 +15,7 @@
 #include <ncurses.h>
 #include <locale.h>
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <thread>
 
@@ -273,14 +274,18 @@ void App::destroyWindows() {
 bool App::init(LDAPConn &conn, const std::string &initFilter,
                const std::string &initBase,
                const std::string &serverUri,
-               const std::string &bindIdentity) {
+               const std::string &bindIdentity,
+               bool baseExplicit) {
     conn_ = &conn;
     serverUri_ = serverUri;
     bindIdentity_ = bindIdentity;
+    baseExplicit_ = baseExplicit;
     if (!initNCurses()) return false;
 
     tree_ = std::make_unique<TreeWidget>(conn);
-    tree_->loadRoot(initBase.empty() ? "" : initBase);
+    // When no explicit -b was given, start at the RootDSE (empty root) even
+    // though conn may have auto-detected a default root DN.
+    tree_->loadRoot(baseExplicit ? initBase : "");
 
     // Auto-fit tree width based on initial content
     int cols = getmaxx(stdscr);
@@ -340,11 +345,62 @@ bool App::init(LDAPConn &conn, const std::string &initFilter,
     return true;
 }
 
+int App::readKey() {
+    int ch = getch();
+    if (ch != 27) return ch;
+
+    // Possibly a CSI sequence. Read the following characters with a short
+    // timeout so lone Escape still works immediately.
+    int c2 = getch();
+    if (c2 != '[') {
+        if (c2 == ERR) return 27;
+        // Not a CSI sequence: return the Escape, and keep c2 buffered.
+        ungetch(c2);
+        return 27;
+    }
+    // Some Konsole layouts emit \E[[A (ESC [ [ A) for F1, \E[[B for F2, ...
+    int c3 = getch();
+    if (c3 == '[') {
+        int c4 = getch();
+        if (c4 >= 'A' && c4 <= 'L') {
+            int f = (c4 - 'A') + 1;   // A->F1 ... L->F12
+            if (f >= 1 && f <= 12)
+                return KEY_F(f);
+        }
+        return 27;
+    }
+    // Gather digits until '~' (CSI F-key form \E[n~).
+    int num = 0;
+    bool have = false;
+    int d = c3;
+    for (int i = 0; i < 3; i++) {
+        if (d >= '0' && d <= '9') {
+            num = num * 10 + (d - '0');
+            have = true;
+        } else if (d == '~' && have) {
+            // Map CSI F-key codes to ncurses KEY_F(n).
+            // 11..15,17..21,23,24 -> F1..F12
+            int f = -1;
+            if (num >= 11 && num <= 15)      f = num - 10;
+            else if (num >= 17 && num <= 21) f = num - 11;
+            else if (num == 23)              f = 11;
+            else if (num == 24)              f = 12;
+            if (f >= 1 && f <= 12)
+                return KEY_F(f);
+            return 27;
+        } else {
+            return 27;
+        }
+        d = getch();
+    }
+    return 27;
+}
+
 int App::run() {
     running_ = true;
 
     while (running_) {
-        int ch = getch();
+        int ch = readKey();
 
         if (ch == KEY_RESIZE) {
             destroyWindows();
@@ -559,6 +615,26 @@ void App::draw() {
         }
         wnoutrefresh(stdscr);
     }
+
+    // Warn when a background operation runs longer than 1s.
+    if (loading_.load() &&
+        std::chrono::steady_clock::now() - loadingStart_ > std::chrono::seconds(1)) {
+        int pw = 46, ph = 5;
+        int py = (LINES - ph) / 2, px = (COLS - pw) / 2;
+        if (py < 0) py = 0;
+        if (px < 0) px = 0;
+        wattron(stdscr, COLOR_PAIR(CP_STATUS_WARN) | A_BOLD);
+        for (int r = 0; r < ph; r++)
+            for (int c = 0; c < pw; c++)
+                mvwaddch(stdscr, py + r, px + c, ' ');
+        wattroff(stdscr, COLOR_PAIR(CP_STATUS_WARN) | A_BOLD);
+        wattron(stdscr, COLOR_PAIR(CP_STATUS_WARN) | A_BOLD);
+        mvwaddstr(stdscr, py, px + 2, " Operation in progress ");
+        mvwaddstr(stdscr, py + 2, px + 2, ("  " + loadingMsg_).substr(0, pw - 4).c_str());
+        mvwaddstr(stdscr, py + 3, px + 2, "  (Esc to cancel)");
+        wattroff(stdscr, COLOR_PAIR(CP_STATUS_WARN) | A_BOLD);
+        wnoutrefresh(stdscr);
+    }
     doupdate();
 }
 
@@ -587,10 +663,11 @@ void App::drawMenuBar() {
         } else {
             wattron(headerWin_, COLOR_PAIR(CP_MENU));
         }
-        mvwaddstr(headerWin_, 0, x, menus[m].label.c_str());
+        std::string label = "F" + std::to_string(m + 1) + " " + menus[m].label;
+        mvwaddstr(headerWin_, 0, x, label.c_str());
         wattroff(headerWin_, active ? (COLOR_PAIR(CP_MENU_ACTIVE) | A_BOLD)
                                     : COLOR_PAIR(CP_MENU));
-        x += static_cast<int>(menus[m].label.size());
+        x += static_cast<int>(label.size());
     }
 
     // (dropdown drawn at end of draw() on stdscr)
@@ -658,7 +735,30 @@ void App::drawLogBar() {
     if (!logWin_) return;
     werase(logWin_);
     wattron(logWin_, COLOR_PAIR(CP_LOG));
-    mvwaddstr(logWin_, 0, 0, log_.c_str());
+
+    std::string hints;
+    if (!pendingConfirm_.empty()) {
+        hints = "y=confirm  n=cancel  Esc=abort";
+    } else if (attrs_ && attrs_->editMode_) {
+        hints = "type=edit  Enter=apply  Esc=cancel  Left/Right=move  Home/End";
+    } else if (attrs_ && attrs_->searchMode_) {
+        hints = "type=search  Enter=done  Esc=cancel";
+    } else if (focus_ == FOCUS_TREE) {
+        hints = "Up/Dn=move  Enter=open  +/-=expand  g=RootDSE  /=search  y=copy  p=paste  h=help  q=quit";
+    } else if (focus_ == FOCUS_ATTRS) {
+        hints = "Up/Dn=move  Enter=open  +/-=expand  F2=edit  /=search  h=help  Tab=tree";
+    } else if (focus_ == FOCUS_INPUT) {
+        hints = "type=filter  Enter=search  Esc=cancel";
+    }
+
+    std::string line;
+    if (!log_.empty())
+        line = log_ + (hints.empty() ? "" : "   " + hints);
+    else
+        line = hints;
+    if (static_cast<int>(line.size()) > getmaxx(logWin_))
+        line = line.substr(line.size() - getmaxx(logWin_));
+    mvwaddstr(logWin_, 0, 0, line.c_str());
     wattroff(logWin_, COLOR_PAIR(CP_LOG));
 }
 
@@ -698,6 +798,7 @@ void App::handleKey(int ch) {
             attrs_->editOrig_ = val;
             attrs_->editStr_ = val;
             attrs_->editPos_ = static_cast<int>(val.size());
+            log_ = "Editing " + attrs_->getAttrName(sr) + ": " + val;
         }
         return;
     }
@@ -815,6 +916,9 @@ void App::handleKey(int ch) {
 
     if (ch == 'q' || ch == 'Q') { running_ = false; return; }
 
+    // h / H / ? : show the keyboard help popup
+    if (ch == 'h' || ch == 'H' || ch == '?') { showHelp(); return; }
+
     // '/' in tree: focus filter bar, set search base to current node
     if (ch == '/' && focus_ == FOCUS_TREE) {
         searchBase_ = tree_->selectedDN();
@@ -845,12 +949,24 @@ void App::handleKey(int ch) {
             appDuplicateEntry(clipboard_);
             return;
         }
+        // g = go to the RootDSE (jump the tree back to the directory root)
+        if (ch == 'g' || ch == 'G') {
+            tree_->loadRoot("");
+            currentDN_ = tree_->selectedDN();
+            loadSelectedEntry();
+            status_ = "RootDSE";
+            log_ = "At RootDSE  (press g to re-root here)";
+            return;
+        }
 
         if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) {
             tree_->handleKey(ch);
             if (tree_->selectionConfirmed()) {
                 tree_->clearConfirmed();
                 loadSelectedEntry();
+                // After opening an entry, move focus to the attribute panel so
+                // F2 (inline edit) works immediately.
+                focus_ = FOCUS_ATTRS;
             }
         } else if (ch == KEY_RIGHT || ch == '+') {
             auto *node = tree_->currentNode();
@@ -992,6 +1108,7 @@ void App::expandTreeNode(void *nodePtr) {
 
     cancel_.store(false);
     loading_.store(true);
+    loadingStart_ = std::chrono::steady_clock::now();
     loadingMsg_ = "Loading " + node->name;
 
     // Wait for worker thread to finish or be canceled
@@ -1027,6 +1144,7 @@ void App::loadSelectedEntry() {
 
     cancel_.store(false);
     loading_.store(true);
+    loadingStart_ = std::chrono::steady_clock::now();
     loadingMsg_ = dn.empty() ? "Loading RootDSE" : "Loading " + dn;
 
     if (worker_.joinable())
@@ -1130,6 +1248,80 @@ int App::appPickList(const std::string &title, const std::vector<std::string> &i
         else if (ch == KEY_PPAGE) { sel -= maxRows; if (sel < 0) sel = 0; }
         else if (ch == KEY_NPAGE) { sel += maxRows; if (sel >= static_cast<int>(items.size())) sel = static_cast<int>(items.size()) - 1; }
     }
+}
+
+void App::showHelp() {
+    const std::vector<std::string> lines = {
+        "  Navigation",
+        "    Up/Down, PgUp/PgDn   move through the tree / attributes",
+        "    Left / Right (+/-)   collapse / expand a node",
+        "    Enter                select the entry under the cursor",
+        "    Tab / Shift-Tab      switch focus (tree / attributes / filter)",
+        "    /                    enter filter mode (search from current node)",
+        "    g                    jump back to the RootDSE",
+        "  Commands",
+        "    q                    quit",
+        "    y                    copy selected entry DN (clipboard)",
+        "    p                    paste / duplicate clipboard entry",
+        "    F2                   edit a value (attributes panel)",
+        "    F1..F8, F11, F12     open a menu from the top bar",
+        "    h, H, ?              show this help",
+        "  Editing",
+        "    All writes are confirmed (y/n) and run on a background thread.",
+        "    Esc cancels a running operation.",
+    };
+    timeout(-1);
+    const int cols = 64;
+    int rows = static_cast<int>(lines.size()) + 4;
+    int sy = (LINES - rows) / 2;
+    int sx = (COLS - cols) / 2;
+    if (sy < 0) sy = 0;
+    if (sx < 0) sx = 0;
+    if (sy + rows >= LINES) { rows = LINES - sy - 1; sy = 0; }
+
+    wattron(stdscr, COLOR_PAIR(CP_BORDER) | A_BOLD);
+    for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++)
+            mvwaddch(stdscr, sy + r, sx + c, ' ');
+    wattroff(stdscr, COLOR_PAIR(CP_BORDER) | A_BOLD);
+    for (int c = 1; c < cols - 1; c++) {
+        mvwaddch(stdscr, sy, sx + c, '-');
+        mvwaddch(stdscr, sy + rows - 1, sx + c, '-');
+    }
+    for (int r = 1; r < rows - 1; r++) {
+        mvwaddch(stdscr, sy + r, sx, '|');
+        mvwaddch(stdscr, sy + r, sx + cols - 1, '|');
+    }
+    mvwaddch(stdscr, sy, sx, '+'); mvwaddch(stdscr, sy, sx + cols - 1, '+');
+    mvwaddch(stdscr, sy + rows - 1, sx, '+'); mvwaddch(stdscr, sy + rows - 1, sx + cols - 1, '+');
+    wattron(stdscr, COLOR_PAIR(CP_HEADER) | A_BOLD);
+    mvwaddstr(stdscr, sy, sx + 2, " DirAtlas Help ");
+    wattroff(stdscr, COLOR_PAIR(CP_HEADER) | A_BOLD);
+    int fy = sy + 2;
+    for (const auto &ln : lines) {
+        if (fy >= sy + rows - 1) break;
+        if (!ln.empty() && ln[1] != ' ') {
+            wattron(stdscr, COLOR_PAIR(CP_ATTR_OP) | A_BOLD);
+            mvwaddstr(stdscr, fy, sx + 1, ln.c_str());
+            wattroff(stdscr, COLOR_PAIR(CP_ATTR_OP) | A_BOLD);
+        } else {
+            mvwaddstr(stdscr, fy, sx + 1, ln.c_str());
+        }
+        fy++;
+    }
+    wattron(stdscr, COLOR_PAIR(CP_ATTR_OP));
+    mvwaddstr(stdscr, sy + rows - 2, sx + 2, "Press any key to close");
+    wattroff(stdscr, COLOR_PAIR(CP_ATTR_OP));
+    wnoutrefresh(stdscr);
+    doupdate();
+    getch();
+    timeout(100);
+    touchwin(stdscr);
+    touchwin(headerWin_); touchwin(inputWin_); touchwin(treeWin_);
+    touchwin(attrWin_); touchwin(statusWin_); touchwin(logWin_);
+    clear();
+    refresh();
+    draw();
 }
 
 int App::appPopupForm(const std::string &title,
@@ -1301,6 +1493,7 @@ void App::appExportLdif() {
     // Run export in background
     loadingMsg_ = "Exporting to " + filename;
     loading_.store(true);
+    loadingStart_ = std::chrono::steady_clock::now();
     cancel_.store(false);
     if (worker_.joinable()) worker_.join();
     worker_ = std::thread([this, baseDN, filter, filename, exportOp]() {
@@ -1386,6 +1579,7 @@ void App::runWriteOp(const std::function<bool()> &op, const std::string &okMsg,
     if (worker_.joinable()) worker_.join();
     cancel_.store(false);
     loading_.store(true);
+    loadingStart_ = std::chrono::steady_clock::now();
     loadingMsg_ = okMsg;
     worker_ = std::thread([this, op, okMsg, failMsg, refreshTree, reloadEntry]() {
         bool ok = false;

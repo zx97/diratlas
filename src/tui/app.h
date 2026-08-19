@@ -16,6 +16,7 @@
 #include <atomic>
 #include <thread>
 #include <functional>
+#include <chrono>
 
 namespace diratlas::tui {
 
@@ -43,7 +44,8 @@ public:
     bool init(LDAPConn &conn, const std::string &initFilter = "",
               const std::string &initBase = "",
               const std::string &serverUri = "",
-              const std::string &bindIdentity = "");
+              const std::string &bindIdentity = "",
+              bool baseExplicit = false);
     /** @brief Enter the main event loop (returns on quit). */
     int run();
     /** @brief Signal the event loop to exit. */
@@ -66,6 +68,10 @@ private:
     void destroyWindows();
     void draw();
     void handleKey(int ch);
+    /** @brief Read one key, translating CSI function-key sequences (\E[n~)
+     *         that some terminals (Konsole, PuTTY) emit but ncurses does not
+     *         map to KEY_F(n) under the xterm terminfo. */
+    int readKey();
     void loadSelectedEntry();
     void expandTreeNode(void *nodePtr);
     void appExportLdif();
@@ -88,6 +94,8 @@ private:
     /** @brief Scrollable list picker; returns 1 on Enter, 0 on Esc. */
     int appPickList(const std::string &title, const std::vector<std::string> &items,
                     int &sel);
+    /** @brief Show a modal keyboard-help popup; blocks until any key. */
+    void showHelp();
     void drawMenuBar();
     void drawInputBar();
     void drawStatusBar();
@@ -120,6 +128,7 @@ private:
     std::atomic<bool> cancel_{false};     ///< Cancel signal for worker thread
     std::thread worker_;                  ///< Background thread handle
     std::string loadingMsg_;              ///< Message shown during load
+    std::chrono::steady_clock::time_point loadingStart_;  ///< When the current load started
 
     /// When '/' is pressed, this stores the search base DN
     std::string searchBase_;
@@ -130,6 +139,8 @@ private:
     /// Connection info for status bar
     std::string serverUri_;
     std::string bindIdentity_;
+    /// Whether the search base was given explicitly with -b.
+    bool baseExplicit_{false};
 
     /// Pending edit confirmation (two-step: Enter edits, 'a' applies)
     std::string pendingEditAttr_;

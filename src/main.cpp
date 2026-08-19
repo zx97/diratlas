@@ -85,7 +85,7 @@ static bool terminalSupportsColor() {
 /// @brief Print the DirAtlas banner to @p out, colourised only when the
 ///        terminal supports it (see terminalSupportsColor).
 static void printBanner(std::ostream &out = std::cout) {
-    out << (terminalSupportsColor() ? diratlas::BANNER_TEXT : diratlas::BANNER_TEXT_PLAIN);
+    out << (terminalSupportsColor() ? diratlas::bannerRandom() : diratlas::bannerPlain());
 }
 
 /// @brief Build the version string from compile-time defines.
@@ -1273,7 +1273,7 @@ int main(int argc, char **argv) {
         // App must be destroyed (endwin restores the terminal) BEFORE the
         // banner is printed, so the ANSI banner renders on a clean terminal.
         diratlas::tui::App app;
-        if (!app.init(conn, tuiFilter, cfg.base, cfg.ldapUri, bindId)) {
+        if (!app.init(conn, tuiFilter, cfg.base, cfg.ldapUri, bindId, cfg.baseSet)) {
             std::cerr << "Failed to initialize TUI" << std::endl;
             return 1;
         }

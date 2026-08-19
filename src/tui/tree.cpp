@@ -96,12 +96,16 @@ void TreeWidget::loadRoot(const std::string &rootDN) {
     root_->dn = rootDN;
     root_->depth = 0;
     root_->hasChildren = true;
-    root_->isRootDSE = true;  // Always show RootDSE contexts first
 
     if (rootDN.empty()) {
+        // No base given: root is the RootDSE (empty DN), showing naming contexts.
         root_->name = "RootDSE";
+        root_->isRootDSE = true;
     } else {
-        root_->name = "RootDSE (" + rootDN + ")";
+        // Explicit base (-b): the tree starts at the search base itself, not
+        // at the RootDSE.  Its children are loaded via a normal onelevel search.
+        root_->name = "\U0001F4CC " + rootDN;
+        root_->isRootDSE = false;
     }
 
     loadChildren(root_.get());
