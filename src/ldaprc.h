@@ -6,7 +6,6 @@
 // Licensed under the GNU Affero General Public License v3.0
 // (https://www.gnu.org/licenses/agpl-3.0.txt).
 //
-// Originally based on godap (github.com/Macmod/godap) — MIT license.
 
 #pragma once
 #include <string>
@@ -29,8 +28,8 @@ struct LdapRcConfig {
     int timelimit{10};
     /// Size limit, 0 = unlimited (SIZELIMIT)
     int sizelimit{0};
-    /// Network timeout in seconds (NETWORK_TIMEOUT)
-    int networkTimeout{30};
+    /// Network timeout in seconds (NETWORK_TIMEOUT), 0 = not set
+    int networkTimeout{0};
     /// Alias dereferencing: 0=never, 1=search, 2=find, 3=always (DEREF)
     int deref{0};
     /// Whether to chase referrals (REFERRALS)
@@ -74,7 +73,9 @@ struct LdapRcConfig {
  *
  * @param cfg    Output struct populated with parsed values.
  * @param debug  If true, print which files are read and values set.
+ * @param ldifComments  If true, print "[ldaprc] Reading ..." as "# ..." on stdout
+ *                      (--cli mode; keeps LDIF output comment-safe at any -L level).
  */
-void readLdapRc(LdapRcConfig &cfg, bool debug = false);
+void readLdapRc(LdapRcConfig &cfg, bool debug = false, bool ldifComments = false);
 
 } // namespace diratlas

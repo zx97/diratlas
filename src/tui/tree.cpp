@@ -6,7 +6,6 @@
 // Licensed under the GNU Affero General Public License v3.0
 // (https://www.gnu.org/licenses/agpl-3.0.txt).
 //
-// Originally based on godap (github.com/Macmod/godap) — MIT license.
 
 #include "tree.h"
 #include "../vars.h"

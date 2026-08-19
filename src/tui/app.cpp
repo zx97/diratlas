@@ -6,13 +6,15 @@
 // Licensed under the GNU Affero General Public License v3.0
 // (https://www.gnu.org/licenses/agpl-3.0.txt).
 //
-// Originally based on godap (github.com/Macmod/godap) — MIT license.
 
 #include "app.h"
 #include "tree.h"
 #include "attrs.h"
+#include "../ldapcore/bytes.h"
+#include "../ldapcore/dn.h"
 #include <ncurses.h>
 #include <locale.h>
+#include <algorithm>
 #include <fstream>
 #include <thread>
 
@@ -164,6 +166,8 @@ enum MenuAction {
     M_DEL_ENTRY = 3,
     M_ADD_ATTR = 4,
     M_DEL_ATTR = 5,
+    M_MOVE_ENTRY = 6,
+    M_DUPLICATE_ENTRY = 7,
 };
 
 const std::vector<Menu> menus = {
@@ -174,6 +178,8 @@ const std::vector<Menu> menus = {
     }},
     {" Edit ", {
         {"Add entry",        M_ADD_ENTRY},
+        {"Duplicate entry",  M_DUPLICATE_ENTRY},
+        {"Rename / Move entry", M_MOVE_ENTRY},
         {"Delete entry",     M_DEL_ENTRY},
         {"", 0},
         {"Add attribute",    M_ADD_ATTR},
@@ -287,6 +293,7 @@ bool App::init(LDAPConn &conn, const std::string &initFilter,
     createWindows();
 
     attrs_ = std::make_unique<AttrsWidget>();
+    attrs_->setFlavor(conn_->flavor);
 
     // If a CLI filter was provided, execute search immediately
     if (!initFilter.empty()) {
@@ -415,6 +422,16 @@ int App::run() {
             pendingEntry_ = {};
             pendingMandatory_.clear();
             pendingLog_.clear();
+        }
+
+        // Post-write refresh requested by a successful worker write.
+        if (pendingRefreshTree_.load()) {
+            pendingRefreshTree_.store(false);
+            if (tree_) tree_->refresh();
+        }
+        if (pendingReloadEntry_.load()) {
+            pendingReloadEntry_.store(false);
+            loadSelectedEntry();
         }
 
         // Reset status when loading finishes
@@ -649,6 +666,14 @@ void App::handleKey(int ch) {
     // Ignore input while a background operation is running (except Escape already handled)
     if (loading_.load()) return;
 
+    // Pending destructive confirmation (delete/rename/delete-attr): y or n
+    // short-circuits everything else so no other handler can consume the key.
+    if (!pendingConfirm_.empty()) {
+        if (ch == 'y' || ch == 'Y' || ch == 'n' || ch == 'N' || ch == 27)
+            applyPendingConfirm(static_cast<char>(ch));
+        return;
+    }
+
     // (Escape handling moved to event loop above)
 
     // F9 = previous theme, F10 = next theme (before menu F-key handler)
@@ -692,6 +717,8 @@ void App::handleKey(int ch) {
                     else if (item.key == M_DEL_ENTRY) { appDeleteEntry(); }
                     else if (item.key == M_ADD_ATTR) { appAddAttr(); }
                     else if (item.key == M_DEL_ATTR) { appDeleteAttr(); }
+                    else if (item.key == M_MOVE_ENTRY) { appMoveEntry(); }
+                    else if (item.key == M_DUPLICATE_ENTRY) { appDuplicateEntry(); }
                 }
                 activeMenu_ = -1;
                 activeMenuItem_ = -1;
@@ -729,6 +756,8 @@ void App::handleKey(int ch) {
                 else if (item.key == M_DEL_ENTRY) { appDeleteEntry(); }
                 else if (item.key == M_ADD_ATTR) { appAddAttr(); }
                 else if (item.key == M_DEL_ATTR) { appDeleteAttr(); }
+                else if (item.key == M_MOVE_ENTRY) { appMoveEntry(); }
+                else if (item.key == M_DUPLICATE_ENTRY) { appDuplicateEntry(); }
             }
             activeMenu_ = -1;
             activeMenuItem_ = -1;
@@ -813,10 +842,7 @@ void App::handleKey(int ch) {
         }
         // p = paste: create copy of clipboard entry under selected parent
         if ((ch == 'p' || ch == 'P') && !clipboard_.empty()) {
-            std::string parentDN = tree_->selectedDN();
-            if (!parentDN.empty()) {
-                log_ = "Copy " + clipboard_ + " under " + parentDN + " (not yet implemented)";
-            }
+            appDuplicateEntry(clipboard_);
             return;
         }
 
@@ -841,13 +867,37 @@ void App::handleKey(int ch) {
         // 'y'/'Y' while CONFIRM is shown → apply pending edit FIRST
         if ((ch == 'y' || ch == 'Y') && !pendingEditAttr_.empty()) {
             if (!currentDN_.empty()) {
-                bool ok = conn_->modifyAttribute(
-                    currentDN_, pendingEditAttr_, {pendingEditNew_});
-                if (ok) {
-                    log_ = "Applied: " + pendingEditAttr_ + " = " + pendingEditNew_;
-                    loadSelectedEntry();
+                std::string dn = currentDN_;
+                std::string attr = pendingEditAttr_;
+                std::string oldV = pendingEditOld_;
+                std::string newV = pendingEditNew_;
+                auto allVals = attrs_->getAttrValues(attr);
+                bool braced = !allVals.empty();
+                for (const auto &v : allVals)
+                    if (v.empty() || v[0] != '{') { braced = false; break; }
+                if (braced) {
+                    // Brace-numbered values are order-sensitive ({0},{1},...):
+                    // rebuild the full list with the edited value replaced and
+                    // send one LDAP_MOD_REPLACE so {N} ordering is preserved.
+                    for (auto &v : allVals)
+                        if (v == oldV) { v = newV; break; }
+                    std::stable_sort(allVals.begin(), allVals.end(),
+                        [](const std::string &a, const std::string &b) {
+                            return ldapcore::braceIdx(a) < ldapcore::braceIdx(b);
+                        });
+                    runWriteOp([this, dn, attr, allVals]() {
+                                   return conn_->modifyAttribute(dn, attr, allVals);
+                               },
+                               "Applied: " + attr + " = " + newV, "Modify failed",
+                               false, true);
                 } else {
-                    log_ = "Modify failed: " + conn_->getLastError();
+                    // Ordinary attribute: atomically swap just the edited value,
+                    // leaving all other values untouched (no full REPLACE).
+                    runWriteOp([this, dn, attr, oldV, newV]() {
+                                   return conn_->replaceAttributeValue(dn, attr, oldV, newV);
+                               },
+                               "Applied: " + attr + " = " + newV, "Modify failed",
+                               false, true);
                 }
             }
             pendingEditAttr_.clear();
@@ -893,16 +943,21 @@ void App::handleKey(int ch) {
                     // Check if this is an RDN attribute (cn, ou, uid, dc) — warn about rename
                     bool isRDN = (attrName == "cn" || attrName == "ou" ||
                                   attrName == "uid" || attrName == "dc");
-                    if (isRDN)
+                    if (isRDN) {
+                        // Renaming an RDN attribute is a server-side ModifyDN
+                        // operation (RFC 4511), not a plain attribute edit.
+                        std::string newRdn = attrName + "=" + newVal;
                         log_ = "RENAME: " + attrName + " will rename the entry! "
                                "'" + oldVal + "' → '" + newVal + "'. Y to confirm, N to cancel.";
-                    else
+                        pendingConfirm_ = "rename:" + currentDN_ + "|" + newRdn;
+                    } else {
                         log_ = "MODIFY: " + attrName + " '" + oldVal + "' → '" + newVal
                                + "'. Y to confirm, N to cancel.";
-                    // Store pending modification
-                    pendingEditAttr_ = attrName;
-                    pendingEditNew_ = newVal;
-                    pendingEditOld_ = oldVal;
+                        // Store pending modification
+                        pendingEditAttr_ = attrName;
+                        pendingEditNew_ = newVal;
+                        pendingEditOld_ = oldVal;
+                    }
                 } else {
                     log_ = "No change";
                 }
@@ -1006,6 +1061,77 @@ void App::setLog(const std::string &msg) { log_ = msg; }
 
 namespace diratlas::tui {
 
+int App::appPickList(const std::string &title, const std::vector<std::string> &items,
+                     int &sel) {
+    if (items.empty()) return 0;
+    timeout(-1);  // blocking input for the popup
+
+    const int maxRows = 14;
+    int rows = std::min(maxRows, static_cast<int>(items.size())) + 3;
+    int cols = 60;
+    int sy = (LINES - rows) / 2;
+    int sx = (COLS - cols) / 2;
+    if (sy < 0) sy = 0;
+    if (sx < 0) sx = 0;
+
+    int top = 0;
+    if (sel < 0) sel = 0;
+    if (sel >= static_cast<int>(items.size())) sel = static_cast<int>(items.size()) - 1;
+
+    while (true) {
+        if (sel < top) top = sel;
+        if (sel >= top + maxRows) top = sel - maxRows + 1;
+
+        // Draw popup background and border
+        wattron(stdscr, COLOR_PAIR(CP_BORDER) | A_BOLD);
+        for (int r = 0; r < rows; r++)
+            for (int c = 0; c < cols; c++)
+                mvwaddch(stdscr, sy + r, sx + c, ' ');
+        wattroff(stdscr, COLOR_PAIR(CP_BORDER) | A_BOLD);
+        for (int c = 1; c < cols - 1; c++) {
+            mvwaddch(stdscr, sy, sx + c, '-');
+            mvwaddch(stdscr, sy + rows - 1, sx + c, '-');
+        }
+        for (int r = 1; r < rows - 1; r++) {
+            mvwaddch(stdscr, sy + r, sx, '|');
+            mvwaddch(stdscr, sy + r, sx + cols - 1, '|');
+        }
+        mvwaddch(stdscr, sy, sx, '+'); mvwaddch(stdscr, sy, sx + cols - 1, '+');
+        mvwaddch(stdscr, sy + rows - 1, sx, '+'); mvwaddch(stdscr, sy + rows - 1, sx + cols - 1, '+');
+
+        // Title
+        wattron(stdscr, COLOR_PAIR(CP_HEADER) | A_BOLD);
+        mvwaddstr(stdscr, sy, sx + 2, (" " + title + " ").c_str());
+        wattroff(stdscr, COLOR_PAIR(CP_HEADER) | A_BOLD);
+
+        // Items (scrollable window)
+        int fy = sy + 2;
+        for (int i = top; i < top + maxRows && i < static_cast<int>(items.size()); i++) {
+            bool active = (i == sel);
+            if (active) wattron(stdscr, COLOR_PAIR(CP_TREE_CURSOR));
+            mvwaddstr(stdscr, fy, sx + 2, items[i].c_str());
+            if (active) wattroff(stdscr, COLOR_PAIR(CP_TREE_CURSOR));
+            fy++;
+        }
+
+        // Help line
+        wattron(stdscr, COLOR_PAIR(CP_ATTR_OP));
+        mvwaddstr(stdscr, sy + rows - 2, sx + 2, "Up/Down=move  Enter=select  Esc=cancel");
+        wattroff(stdscr, COLOR_PAIR(CP_ATTR_OP));
+
+        wnoutrefresh(stdscr);
+        doupdate();
+
+        int ch = getch();
+        if (ch == 27) { timeout(100); touchwin(stdscr); return 0; }
+        if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) { timeout(100); touchwin(stdscr); return 1; }
+        if (ch == KEY_UP) { if (sel > 0) sel--; }
+        else if (ch == KEY_DOWN) { if (sel + 1 < static_cast<int>(items.size())) sel++; }
+        else if (ch == KEY_PPAGE) { sel -= maxRows; if (sel < 0) sel = 0; }
+        else if (ch == KEY_NPAGE) { sel += maxRows; if (sel >= static_cast<int>(items.size())) sel = static_cast<int>(items.size()) - 1; }
+    }
+}
+
 int App::appPopupForm(const std::string &title,
                       std::vector<std::pair<std::string, std::string*>> &fields,
                       bool *checkbox) {
@@ -1020,10 +1146,19 @@ int App::appPopupForm(const std::string &title,
     if (sy + rows >= LINES) rows = LINES - sy - 1;
     if (rows < 5) rows = 5;
 
+    // Value display area: [sx+20 .. sx+cols-2)
+    const int valX = sx + 20;
+    const int valW = cols - 22;
+
     curs_set(1);
     bool done = false;
     int focus = 0;
     bool checked = false;
+    // Per-field cursor position and horizontal scroll offset.
+    std::vector<int> curPos(fields.size(), 0);
+    std::vector<int> scrollOff(fields.size(), 0);
+    for (size_t i = 0; i < fields.size(); i++)
+        curPos[i] = static_cast<int>(fields[i].second->size());
 
     while (!done) {
         // Draw popup
@@ -1056,11 +1191,36 @@ int App::appPopupForm(const std::string &title,
             if (active) wattron(stdscr, COLOR_PAIR(CP_TREE_CURSOR));
             mvwaddstr(stdscr, fy, sx + 2, fields[i].first.c_str());
             if (active) wattroff(stdscr, COLOR_PAIR(CP_TREE_CURSOR));
-            std::string val = *fields[i].second;
-            if (val.empty()) val = "(empty)";
-            if (static_cast<int>(val.size()) > cols - 20)
-                val = val.substr(0, cols - 23) + "...";
-            mvwaddstr(stdscr, fy, sx + 20, val.c_str());
+            const std::string &full = *fields[i].second;
+            if (active) {
+                // Keep the cursor visible: scroll the window so the cursor
+                // stays within [scroll, scroll+valW).
+                if (curPos[i] < scrollOff[i]) scrollOff[i] = curPos[i];
+                if (curPos[i] > scrollOff[i] + valW - 1) scrollOff[i] = curPos[i] - valW + 1;
+            }
+            std::string win;
+            if (scrollOff[i] < static_cast<int>(full.size()))
+                win = full.substr(scrollOff[i], valW);
+            if (active) {
+                int caret = curPos[i] - scrollOff[i];
+                if (caret < 0) caret = 0;
+                if (caret > valW - 1) caret = valW - 1;
+                for (int c = 0; c < valW; c++) {
+                    char chc = (c < static_cast<int>(win.size())) ? win[c] : ' ';
+                    if (c == caret) {
+                        wattron(stdscr, COLOR_PAIR(CP_SELECTED));
+                        mvwaddch(stdscr, fy, valX + c, chc);
+                        wattroff(stdscr, COLOR_PAIR(CP_SELECTED));
+                    } else {
+                        mvwaddch(stdscr, fy, valX + c, chc);
+                    }
+                }
+                if (full.empty())
+                    mvwaddstr(stdscr, fy, valX, "(empty)");
+            } else {
+                if (win.empty()) win = "(empty)";
+                mvwaddstr(stdscr, fy, valX, win.c_str());
+            }
             fy++;
         }
 
@@ -1095,10 +1255,23 @@ int App::appPopupForm(const std::string &title,
         // Text input for focused field
         if (focus >= 0 && focus < static_cast<int>(fields.size())) {
             std::string &val = *(fields[focus].second);
+            int &cp = curPos[focus];
+            if (ch == KEY_LEFT) { if (cp > 0) cp--; continue; }
+            if (ch == KEY_RIGHT) { if (cp < static_cast<int>(val.size())) cp++; continue; }
+            if (ch == KEY_HOME) { cp = 0; continue; }
+            if (ch == KEY_END) { cp = static_cast<int>(val.size()); continue; }
+            if (ch == KEY_DC) {
+                if (cp < static_cast<int>(val.size())) val.erase(cp, 1);
+                continue;
+            }
             if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
-                if (!val.empty()) val.pop_back();
-            } else if (ch >= 32 && ch <= 126) {
-                val += static_cast<char>(ch);
+                if (cp > 0 && !val.empty()) { val.erase(cp - 1, 1); cp--; }
+                continue;
+            }
+            if (ch >= 32 && ch <= 126) {
+                val.insert(cp, 1, static_cast<char>(ch));
+                cp++;
+                continue;
             }
         }
     }
@@ -1138,39 +1311,35 @@ void App::appExportLdif() {
         }
         std::vector<std::string> attrs = {"*"};
         if (exportOp) attrs.push_back("+");
+
+        std::vector<LDAPEntry> entries;
+        if (!conn_->search(baseDN, LDAP_SCOPE_SUBTREE, filter, attrs, false, entries)) {
+            out.close();
+            pendingLog_ = "Export failed: " + conn_->getLastError();
+            pendingUpdate_.store(true);
+            loading_.store(false);
+            return;
+        }
+
         int total = 0;
-        std::string cookie;
-        int pageSize = 500;
-        do {
-            // Manual paging: run search with page control
-            std::vector<LDAPEntry> page;
-            // For simplicity, do a single subtree search (may be large)
-            if (total == 0) {
-                conn_->search(baseDN, LDAP_SCOPE_SUBTREE, filter, attrs, false, page);
-            }
-            for (auto &e : page) {
-                if (cancel_.load()) break;
-                out << "dn: " << e.dn << "\n";
-                for (auto &an : e.attributeNames) {
-                    auto it = e.attributes.find(an);
-                    if (it == e.attributes.end()) continue;
-                    for (auto &v : it->second) {
-                        // Check if binary → base64 encode
-                        bool binary = false;
-                        for (unsigned char c : v)
-                            if (c < 32 && c != '\n' && c != '\t') { binary = true; break; }
-                        if (binary || v.empty()) {
-                            out << an << ":: " << v << "\n";
-                        } else {
-                            out << an << ": " << v << "\n";
-                        }
-                    }
+        for (auto &e : entries) {
+            if (cancel_.load()) break;
+            out << "dn: " << e.dn << "\n";
+            for (auto &an : e.attributeNames) {
+                auto it = e.attributes.find(an);
+                if (it == e.attributes.end()) continue;
+                for (auto &v : it->second) {
+                    if (v.empty())
+                        out << an << ":\n";
+                    else if (ldapcore::ldifSafeValue(v))
+                        out << an << ": " << v << "\n";
+                    else
+                        out << an << ":: " << ldapcore::base64Encode(v) << "\n";
                 }
-                out << "\n";
-                total++;
             }
-            if (page.empty()) break;
-        } while (!cancel_.load());
+            out << "\n";
+            total++;
+        }
         out.close();
         pendingLog_ = "Exported " + std::to_string(total) + " entries to " + filename;
         pendingUpdate_.store(true);
@@ -1181,70 +1350,8 @@ void App::appExportLdif() {
 void App::appDeleteEntry() {
     std::string dn = tree_ ? tree_->selectedDN() : "";
     if (dn.empty()) { setLog("Delete: position cursor on an entry first"); return; }
-    // Quick confirm: show in log and wait for Y
-    setLog("Delete " + dn + "? Press Y to confirm");
-    // Simple: defer to background
-    loadingMsg_ = "Deleting " + dn;
-    loading_.store(true);
-    cancel_.store(false);
-    if (worker_.joinable()) worker_.join();
-    worker_ = std::thread([this, dn]() {
-        // Wait a moment for user to press Y (handled in main loop)
-        // For now, execute directly with a small delay
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        if (cancel_.load()) { loading_.store(false); return; }
-        if (conn_->deleteObject(dn)) {
-            pendingLog_ = "Deleted: " + dn; pendingUpdate_.store(true);
-        } else {
-            pendingLog_ = "Delete failed: " + conn_->getLastError(); pendingUpdate_.store(true);
-        }
-        loading_.store(false);
-    });
-}
-
-void App::appAddEntry() {
-    std::string parentDN = tree_ ? tree_->selectedDN() : "";
-    if (parentDN.empty()) { setLog("Add: position cursor on the parent entry first"); return; }
-    std::string rdn = "cn=newentry";
-    std::string objectClass = "inetOrgPerson";
-    std::vector<std::pair<std::string, std::string*>> fields = {
-        {"Parent DN:", &parentDN}, {"RDN:", &rdn}, {"ObjectClass:", &objectClass},
-    };
-    if (appPopupForm("Add Entry", fields, nullptr) == 0) { setLog("Add cancelled"); return; }
-    std::string dn = rdn + "," + parentDN;
-    std::map<std::string, std::vector<std::string>> attrs = {
-        {"objectClass", {"top", objectClass}},
-    };
-    // Extract attribute name from RDN
-    auto eq = rdn.find('=');
-    if (eq != std::string::npos) {
-        std::string rdnAttr = rdn.substr(0, eq);
-        attrs[rdnAttr] = {rdn.substr(eq + 1)};
-    }
-    if (conn_->addObject(dn, attrs)) {
-        setLog("Created: " + dn);
-        if (tree_) tree_->refresh();
-    } else {
-        setLog("Add failed: " + conn_->getLastError());
-    }
-}
-
-void App::appAddAttr() {
-    std::string dn = tree_ ? tree_->selectedDN() : "";
-    if (dn.empty()) { setLog("Add attr: select an entry first"); return; }
-    std::string attrName;
-    std::string attrValue;
-    std::vector<std::pair<std::string, std::string*>> fields = {
-        {"Attribute:", &attrName}, {"Value:", &attrValue},
-    };
-    if (appPopupForm("Add Attribute", fields, nullptr) == 0) { setLog("Add attr cancelled"); return; }
-    if (attrName.empty()) { setLog("Attribute name required"); return; }
-    if (conn_->addAttribute(dn, attrName, {attrValue})) {
-        setLog("Added " + attrName + " to " + dn);
-        loadSelectedEntry();
-    } else {
-        setLog("Add attr failed: " + conn_->getLastError());
-    }
+    pendingConfirm_ = "delete:" + dn;
+    setLog("Delete " + dn + "?  [Y]es / [N]o");
 }
 
 void App::appDeleteAttr() {
@@ -1259,11 +1366,208 @@ void App::appDeleteAttr() {
         if (appPopupForm("Delete Attribute", fields, nullptr) == 0) return;
     }
     if (attrName.empty()) { setLog("Attribute name required"); return; }
-    if (conn_->deleteAttribute(dn, attrName)) {
-        setLog("Deleted " + attrName + " from " + dn);
-        loadSelectedEntry();
+
+    // A selected value deletes just that value; otherwise the whole attribute.
+    std::string val;
+    if (attrs_ && attrs_->selectedRow() >= 0 && attrs_->selectedRow() < attrs_->rowCount())
+        val = attrs_->getValue(attrs_->selectedRow());
+    std::vector<std::string> allVals = attrs_ ? attrs_->getAttrValues(attrName) : std::vector<std::string>{};
+    if (!val.empty() && allVals.size() > 1) {
+        pendingConfirm_ = "delval:" + dn + "|" + attrName + "|" + val;
+        setLog("Delete value of " + attrName + "?  [Y]es / [N]o");
     } else {
-        setLog("Delete attr failed: " + conn_->getLastError());
+        pendingConfirm_ = "delattr:" + dn + "|" + attrName;
+        setLog("Delete attribute " + attrName + "?  [Y]es / [N]o");
+    }
+}
+
+void App::runWriteOp(const std::function<bool()> &op, const std::string &okMsg,
+                     const std::string &failMsg, bool refreshTree, bool reloadEntry) {
+    if (worker_.joinable()) worker_.join();
+    cancel_.store(false);
+    loading_.store(true);
+    loadingMsg_ = okMsg;
+    worker_ = std::thread([this, op, okMsg, failMsg, refreshTree, reloadEntry]() {
+        bool ok = false;
+        try { ok = op(); } catch (...) { ok = false; }
+        if (cancel_.load()) { loading_.store(false); return; }
+        pendingLog_ = ok ? okMsg : failMsg + ": " + conn_->getLastError();
+        if (ok && refreshTree) pendingRefreshTree_.store(true);
+        if (ok && reloadEntry) pendingReloadEntry_.store(true);
+        pendingUpdate_.store(true);
+        loading_.store(false);
+    });
+}
+
+void App::applyPendingConfirm(char ans) {
+    std::string cmd = pendingConfirm_;
+    pendingConfirm_.clear();
+    if (ans != 'y' && ans != 'Y') { setLog("Cancelled"); return; }
+
+    auto p1 = cmd.find(':');
+    if (p1 == std::string::npos) return;
+    std::string kind = cmd.substr(0, p1);
+    std::string rest = cmd.substr(p1 + 1);
+
+    if (kind == "delete") {
+        std::string dn = rest;
+        runWriteOp([this, dn]() { return conn_->deleteObject(dn); },
+                    "Deleted: " + dn, "Delete failed", true);
+    } else if (kind == "delattr") {
+        auto bar = rest.find('|');
+        if (bar == std::string::npos) return;
+        std::string dn = rest.substr(0, bar);
+        std::string attr = rest.substr(bar + 1);
+        runWriteOp([this, dn, attr]() { return conn_->deleteAttribute(dn, attr); },
+                    "Deleted " + attr + " from " + dn, "Delete attr failed");
+    } else if (kind == "delval") {
+        auto bar1 = rest.find('|');
+        if (bar1 == std::string::npos) return;
+        auto bar2 = rest.find('|', bar1 + 1);
+        if (bar2 == std::string::npos) return;
+        std::string dn = rest.substr(0, bar1);
+        std::string attr = rest.substr(bar1 + 1, bar2 - bar1 - 1);
+        std::string val = rest.substr(bar2 + 1);
+        runWriteOp([this, dn, attr, val]() { return conn_->deleteAttributeValue(dn, attr, val); },
+                    "Deleted value of " + attr + " from " + dn, "Delete value failed");
+    } else if (kind == "rename") {
+        auto bar = rest.find('|');
+        if (bar == std::string::npos) return;
+        std::string dn = rest.substr(0, bar);
+        std::string newRdn = rest.substr(bar + 1);
+        runWriteOp([this, dn, newRdn]() { return conn_->renameObject(dn, newRdn, true); },
+                    "Renamed: " + dn + " → " + newRdn + "," + ldapcore::parentOf(dn), "Rename failed", true);
+    } else if (kind == "move") {
+        // Move keeps the RDN unchanged and supplies a new parent (newSuperior).
+        auto bar = rest.find('|');
+        if (bar == std::string::npos) return;
+        std::string dn = rest.substr(0, bar);
+        std::string newSuperior = rest.substr(bar + 1);
+        runWriteOp([this, dn, newSuperior]() {
+                        return conn_->renameObject(dn, ldapcore::rdnOf(dn), false, newSuperior);
+                    },
+                    "Moved: " + dn + " → " + newSuperior, "Move failed", true);
+    }
+}
+
+void App::appAddEntry() {
+    std::string parentDN = tree_ ? tree_->selectedDN() : "";
+    if (parentDN.empty()) { setLog("Add: position cursor on the parent entry first"); return; }
+
+    // Let the user pick an objectClass from the server subschema.
+    auto classNames = listObjectClasses(*conn_);
+    std::string objectClass = "inetOrgPerson";
+    if (!classNames.empty()) {
+        int sel = 0;
+        auto it = std::find(classNames.begin(), classNames.end(), objectClass);
+        if (it != classNames.end()) sel = static_cast<int>(it - classNames.begin());
+        if (appPickList("ObjectClass", classNames, sel) == 0) { setLog("Add cancelled"); return; }
+        objectClass = classNames[sel];
+    }
+
+    // Prefill the form with the schema-mandatory attributes of the class.
+    std::string rdn = "cn=newentry";
+    std::vector<std::pair<std::string, std::string*>> fields = {
+        {"Parent DN:", &parentDN}, {"RDN:", &rdn}, {"ObjectClass:", &objectClass},
+    };
+    std::vector<std::string> mustNames;
+    std::vector<std::string> mustVals;
+    auto mandatory = getInheritedMandatoryAttrs(*conn_, objectClass);
+    // Reserve both vectors up front: `fields` stores pointers into `mustVals`
+    // (`&mustVals.back()`), so a later emplace_back reallocation would dangle
+    // them and crash the form (use-after-free). Reserving prevents reallocation.
+    mustNames.reserve(mandatory.size());
+    mustVals.reserve(mandatory.size());
+    for (const auto &must : mandatory) {
+        if (must == "top") continue;
+        mustNames.push_back(must);
+        mustVals.emplace_back();
+        fields.emplace_back(must + ":", &mustVals.back());
+    }
+    if (appPopupForm("Add Entry", fields, nullptr) == 0) { setLog("Add cancelled"); return; }
+
+    std::string dn = rdn + "," + parentDN;
+    std::map<std::string, std::vector<std::string>> attrs = {
+        {"objectClass", {"top", objectClass}},
+    };
+    // Extract attribute name from RDN
+    auto eq = rdn.find('=');
+    if (eq != std::string::npos) {
+        std::string rdnAttr = rdn.substr(0, eq);
+        attrs[rdnAttr] = {rdn.substr(eq + 1)};
+    }
+    for (size_t i = 0; i < mustNames.size(); i++)
+        if (!mustVals[i].empty()) attrs[mustNames[i]] = {mustVals[i]};
+    runWriteOp([this, dn, attrs]() { return conn_->addObject(dn, attrs); },
+               "Created: " + dn, "Add failed", true);
+}
+
+void App::appDuplicateEntry(const std::string &sourceDN) {
+    std::string srcDN = sourceDN.empty() ? (tree_ ? tree_->selectedDN() : "") : sourceDN;
+    if (srcDN.empty()) { setLog("Duplicate: position cursor on an entry first"); return; }
+    std::string parentDN = ldapcore::parentOf(srcDN);
+    if (parentDN.empty()) { setLog("Duplicate: entry has no parent (RootDSE)"); return; }
+
+    // Load the source attributes, ask for a new RDN, then re-add under the parent.
+    LDAPEntry src = conn_->searchOne(srcDN, "(objectClass=*)", {"*"}, false);
+    if (src.attributeNames.empty()) {
+        setLog("Duplicate failed: cannot read " + srcDN);
+        return;
+    }
+    std::string rdn = ldapcore::rdnOf(srcDN);
+    std::vector<std::pair<std::string, std::string*>> fields = {
+        {"Source DN:", &srcDN},
+        {"New RDN:", &rdn},
+        {"Parent DN:", &parentDN},
+    };
+    if (appPopupForm("Duplicate Entry", fields, nullptr) == 0) { setLog("Duplicate cancelled"); return; }
+    std::string newDN = rdn + "," + parentDN;
+    if (newDN == srcDN) { setLog("Duplicate: RDN unchanged"); return; }
+
+    std::map<std::string, std::vector<std::string>> attrs;
+    for (const auto &an : src.attributeNames) {
+        // Skip server-generated operational attributes and the
+        // objectClass list (recomputed from the source below).
+        if (an == "objectClass") continue;
+        if (isOperationalAttr(an)) continue;
+        attrs[an] = src.getAttrs(an);
+    }
+    attrs["objectClass"] = src.getAttrs("objectClass");
+    runWriteOp([this, newDN, attrs]() { return conn_->addObject(newDN, attrs); },
+               "Duplicated: " + srcDN + " → " + newDN, "Duplicate failed", true);
+}
+
+void App::appAddAttr() {
+    std::string dn = tree_ ? tree_->selectedDN() : "";
+    if (dn.empty()) { setLog("Add attr: select an entry first"); return; }
+    std::string attrName;
+    std::string attrValue;
+    std::vector<std::pair<std::string, std::string*>> fields = {
+        {"Attribute:", &attrName}, {"Value:", &attrValue},
+    };
+    if (appPopupForm("Add Attribute", fields, nullptr) == 0) { setLog("Add attr cancelled"); return; }
+    if (attrName.empty()) { setLog("Attribute name required"); return; }
+    runWriteOp([this, dn, attrName, attrValue]() {
+                   return conn_->addAttribute(dn, attrName, {attrValue});
+               },
+               "Added " + attrName + " to " + dn, "Add attr failed", false, true);
+}
+
+void App::appMoveEntry() {
+    std::string dn = tree_ ? tree_->selectedDN() : "";
+    if (dn.empty()) { setLog("Move: position cursor on an entry first"); return; }
+    std::string rdn = ldapcore::rdnOf(dn);
+    std::string newSuperior = ldapcore::parentOf(dn);
+    std::vector<std::pair<std::string, std::string*>> fields = {
+        {"Entry DN:", &dn}, {"New RDN:", &rdn}, {"New parent:", &newSuperior},
+    };
+    if (appPopupForm("Rename / Move Entry", fields, nullptr) == 0) { setLog("Move cancelled"); return; }
+    if (newSuperior == ldapcore::parentOf(dn)) {
+        pendingConfirm_ = "rename:" + dn + "|" + rdn;
+        setLog("Rename " + dn + " → " + rdn + "?  [Y]es / [N]o");
+    } else {
+        pendingConfirm_ = "move:" + dn + "|" + newSuperior;
+        setLog("Move " + dn + " under " + newSuperior + "?  [Y]es / [N]o");
     }
 }
 

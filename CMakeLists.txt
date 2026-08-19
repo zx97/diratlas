@@ -1,26 +1,56 @@
 cmake_minimum_required(VERSION 3.20)
-project(diratlas VERSION 1.1.0 LANGUAGES CXX)
+project(diratlas VERSION 2.5.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC OFF)
 
-# Auto-incrementing build number
-set(BUILD_FILE "${CMAKE_SOURCE_DIR}/build_number.txt")
-if(EXISTS "${BUILD_FILE}")
-    file(READ "${BUILD_FILE}" _bn)
-    string(STRIP "${_bn}" _bn)
-    math(EXPR _bn "${_bn} + 1")
-else()
-    set(_bn 1)
+# Build number derived from git when available (deterministic, reproducible):
+# commit count as the build number plus the short commit hash.
+# Falls back to 0 / "nogit" when git is missing or the tree has no .git
+# (e.g. a source copy), so the build never breaks without git.
+find_package(Git QUIET)
+set(BUILD_NUMBER 0)
+set(BUILD_HASH "nogit")
+if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
+    execute_process(COMMAND ${GIT_EXECUTABLE} rev-list --count HEAD
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        OUTPUT_VARIABLE _git_count
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _git_count_rc
+        ERROR_QUIET)
+    execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        OUTPUT_VARIABLE _git_hash
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _git_hash_rc
+        ERROR_QUIET)
+    # Only trust the output when git actually succeeded and returned a number.
+    if(_git_count_rc EQUAL 0 AND _git_count MATCHES "^[0-9]+$")
+        set(BUILD_NUMBER ${_git_count})
+    endif()
+    if(_git_hash_rc EQUAL 0 AND _git_hash)
+        set(BUILD_HASH ${_git_hash})
+    endif()
 endif()
-file(WRITE "${BUILD_FILE}" "${_bn}\n")
-set(BUILD_NUMBER ${_bn})
 message(STATUS "Build number: ${BUILD_NUMBER}")
+message(STATUS "Build hash:   ${BUILD_HASH}")
 
 # Build date
 string(TIMESTAMP BUILD_DATE "%Y-%m-%d %H:%M:%S")
 message(STATUS "Build date:   ${BUILD_DATE}")
+
+# Build host: capture at configure time, NOT at runtime.
+# (gethostname() at runtime would return whichever machine currently runs
+# the binary, not the one that compiled it.)
+execute_process(COMMAND hostname
+    OUTPUT_VARIABLE BUILD_HOSTNAME
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+if(NOT BUILD_HOSTNAME)
+    set(BUILD_HOSTNAME "unknown")
+endif()
+message(STATUS "Build host:   ${BUILD_HOSTNAME}")
 
 set(LDAP_ROOT "" CACHE PATH "Root of local OpenLDAP installation")
 set(LDAP_INCLUDE_DIR "" CACHE PATH "Path to OpenLDAP include dir (containing ldap.h)")
@@ -80,12 +110,13 @@ message(STATUS "LDAP lib:     ${LDAP_LIB}")
 add_executable(diratlas
     src/main.cpp
     src/ldap_conn.cpp
-    src/formats.cpp
-    src/formats/time_format.cpp
-    src/adidns/types.cpp
-    src/adidns/formats.cpp
-    src/sdl/types.cpp
-    src/sdl/parse.cpp
+    src/ldapcore/attrs.cpp
+    src/ldapcore/bytes.cpp
+    src/ldapcore/dn.cpp
+    src/ad/flags.cpp
+    src/ad/format.cpp
+    src/ad/guid.cpp
+    src/ad/sid.cpp
     src/vars.cpp
     src/tui/app.cpp
     src/tui/tree.cpp
@@ -100,7 +131,9 @@ target_include_directories(diratlas PRIVATE
 
 target_compile_definitions(diratlas PRIVATE
     BUILD_NUMBER=${BUILD_NUMBER}
+    BUILD_HASH="${BUILD_HASH}"
     BUILD_DATE="${BUILD_DATE}"
+    BUILD_HOSTNAME="${BUILD_HOSTNAME}"
     VERSION="${PROJECT_VERSION}"
 )
 
@@ -141,3 +174,19 @@ if(SANITIZER)
         target_link_options(diratlas PRIVATE -fsanitize=${SANITIZER})
     endif()
 endif()
+
+# ── Unit tests (ctest) ──
+enable_testing()
+
+add_executable(test_dn
+    tests/test_dn.cpp
+    src/ldapcore/dn.cpp
+)
+
+target_include_directories(test_dn PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_options(test_dn PRIVATE -Wall -Wextra)
+
+add_test(NAME test_dn COMMAND test_dn)

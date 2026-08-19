@@ -6,7 +6,6 @@
 // Licensed under the GNU Affero General Public License v3.0
 // (https://www.gnu.org/licenses/agpl-3.0.txt).
 //
-// Originally based on godap (github.com/Macmod/godap) — MIT license.
 
 #pragma once
 #include "tui.h"
@@ -74,9 +73,21 @@ private:
     void appAddEntry();
     void appAddAttr();
     void appDeleteAttr();
+    void appMoveEntry();
+    void appDuplicateEntry(const std::string &sourceDN = "");
+    void applyPendingConfirm(char ans);
+    /** @brief Run a write operation on the worker thread; reports via pendingLog_.
+     *  @param refreshTree Reload the tree after a successful write.
+     *  @param reloadEntry Reload the displayed entry after a successful write. */
+    void runWriteOp(const std::function<bool()> &op, const std::string &okMsg,
+                    const std::string &failMsg, bool refreshTree = false,
+                    bool reloadEntry = false);
     int appPopupForm(const std::string &title,
                      std::vector<std::pair<std::string, std::string*>> &fields,
                      bool *checkbox = nullptr);
+    /** @brief Scrollable list picker; returns 1 on Enter, 0 on Esc. */
+    int appPickList(const std::string &title, const std::vector<std::string> &items,
+                    int &sel);
     void drawMenuBar();
     void drawInputBar();
     void drawStatusBar();
@@ -124,6 +135,15 @@ private:
     std::string pendingEditAttr_;
     std::string pendingEditNew_;
     std::string pendingEditOld_;
+
+    /// Pending destructive operation awaiting y/n confirmation.
+    /// Empty = no pending confirmation. Values: "delete:DN", "delattr:DN|ATTR",
+    /// "delval:DN|ATTR|VALUE", "rename:DN|NEWRDN".
+    std::string pendingConfirm_;
+
+    /// Set by the write worker on success to ask the main loop to refresh.
+    std::atomic<bool> pendingRefreshTree_{false};
+    std::atomic<bool> pendingReloadEntry_{false};
 
     // ── Menu / colour theme ──
     int themeIdx_{0};                     ///< Active colour theme index

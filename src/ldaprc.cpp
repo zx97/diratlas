@@ -6,7 +6,6 @@
 // Licensed under the GNU Affero General Public License v3.0
 // (https://www.gnu.org/licenses/agpl-3.0.txt).
 //
-// Originally based on godap (github.com/Macmod/godap) — MIT license.
 
 #include "ldaprc.h"
 #include <cstdlib>
@@ -79,7 +78,7 @@ static void parseLine(const std::string &line, LdapRcConfig &cfg) {
     else if (key == "SASL_SECPROPS") { if (cfg.saslSecProps.empty()) cfg.saslSecProps = val; }
     else if (key == "TIMELIMIT")     { if (cfg.timelimit == 10) { try { cfg.timelimit = std::stoi(val); } catch (...) {} } }
     else if (key == "SIZELIMIT")     { if (cfg.sizelimit == 0) { try { cfg.sizelimit = std::stoi(val); } catch (...) {} } }
-    else if (key == "NETWORK_TIMEOUT") { if (cfg.networkTimeout == 30) { try { cfg.networkTimeout = std::stoi(val); } catch (...) {} } }
+    else if (key == "NETWORK_TIMEOUT") { if (cfg.networkTimeout == 0) { try { cfg.networkTimeout = std::stoi(val); } catch (...) {} } }
     else if (key == "TIMEOUT")       { if (cfg.timelimit == 10) { try { cfg.timelimit = std::stoi(val); } catch (...) {} } }
     else if (key == "DEREF") {
         if (cfg.deref == 0) {
@@ -121,13 +120,14 @@ static void parseLine(const std::string &line, LdapRcConfig &cfg) {
  * @param path  Absolute or relative path to the file.
  * @param cfg   Configuration struct to populate.
  */
-static void parseFile(const std::string &path, LdapRcConfig &cfg, bool debug = false) {
+static void parseFile(const std::string &path, LdapRcConfig &cfg, bool debug = false, bool ldifComments = false) {
     std::ifstream f(path);
     if (!f.is_open()) {
         if (debug) std::cerr << "[ldaprc] Skipping " << path << " (not found)" << std::endl;
         return;
     }
-    std::cerr << "[ldaprc] Reading " << path << std::endl;
+    if (ldifComments) std::cout << "# [ldaprc] Reading " << path << std::endl;
+    else std::cerr << "[ldaprc] Reading " << path << std::endl;
     std::string line;
     while (std::getline(f, line)) {
         parseLine(line, cfg);
@@ -153,16 +153,16 @@ static void parseFile(const std::string &path, LdapRcConfig &cfg, bool debug = f
  *
  * @param cfg  Output struct to populate.
  */
-void readLdapRc(LdapRcConfig &cfg, bool debug) {
+void readLdapRc(LdapRcConfig &cfg, bool debug, bool ldifComments) {
     if (noInit()) {
         if (debug) std::cerr << "[ldaprc] Skipping all files (LDAPNOINIT is set)" << std::endl;
         return;
     }
-    parseFile("/etc/ldap/ldap.conf", cfg, debug);
+    parseFile("/etc/ldap/ldap.conf", cfg, debug, ldifComments);
     std::string home = homeDir();
     if (!home.empty())
-        parseFile(home + "/.ldaprc", cfg, debug);
-    parseFile(".ldaprc", cfg, debug);
+        parseFile(home + "/.ldaprc", cfg, debug, ldifComments);
+    parseFile(".ldaprc", cfg, debug, ldifComments);
 }
 
 } // namespace diratlas

@@ -6,7 +6,6 @@
 // Licensed under the GNU Affero General Public License v3.0
 // (https://www.gnu.org/licenses/agpl-3.0.txt).
 //
-// Originally based on godap (github.com/Macmod/godap) — MIT license.
 
 #pragma once
 #include "tui.h"
@@ -28,7 +27,8 @@ namespace diratlas::tui {
  */
 struct AttrRow {
     std::string name;              ///< Attribute name
-    std::string value;             ///< Attribute value (may be long, word-wrapped in draw())
+    std::string value;             ///< Raw attribute value (used for editing and yank)
+    std::string display;           ///< Optional formatted text shown instead of @p value
     bool operational{false};       ///< True for server-generated operational attributes
     bool mandatory{false};         ///< True if the attribute is MUST per schema
     bool isToggle{false};          ///< True for "[+N more]" / "[hide]" toggle rows
@@ -42,6 +42,19 @@ struct AttrRow {
  */
 std::set<std::string> getMandatoryAttrs(LDAPConn &conn,
                                          const std::vector<std::string> &objectClasses);
+
+/**
+ * @brief List every objectClass NAME defined in the server subschema, sorted.
+ * @return Sorted unique class names, or empty if the subschema is unreachable.
+ */
+std::vector<std::string> listObjectClasses(LDAPConn &conn);
+
+/**
+ * @brief Collect MUST attributes for one objectClass, walking its SUP chain
+ *        so inherited requirements (e.g. person → inetOrgPerson) are included.
+ */
+std::set<std::string> getInheritedMandatoryAttrs(LDAPConn &conn,
+                                                  const std::string &objectClass);
 
 /**
  * @brief ObjectClass hierarchy information from the subschema.
@@ -90,6 +103,13 @@ public:
     int rowCount() const { return static_cast<int>(rows_.size()); }
     std::string getValue(int i) const { return (i >= 0 && i < static_cast<int>(rows_.size())) ? rows_[i].value : ""; }
     std::string getAttrName(int i) const { return (i >= 0 && i < static_cast<int>(rows_.size())) ? rows_[i].name : ""; }
+    /** @brief All raw values of the given attribute from the displayed entry. */
+    std::vector<std::string> getAttrValues(const std::string &attr) const {
+        return entry_.getAttrs(attr);
+    }
+
+    /** @brief Set the server flavour; gates AD-specific attribute formatting. */
+    void setFlavor(LDAPFlavor flavor) { flavor_ = flavor; }
 
     /// Per-attribute collapse state (true = collapsed, showing "[+N more]")
     std::map<std::string, bool> collapsed_;
@@ -124,6 +144,7 @@ private:
     int maxNameW_{0};                    ///< Max attribute name width (for column alignment)
     std::string toggleAttr_;            ///< Attribute name saved for toggle position restore
     int toggleOffset_{0};               ///< Value offset within the attribute for position restore
+    LDAPFlavor flavor_{LDAPFlavor::MicrosoftAD}; ///< Server flavour; gates AD-specific formatting
 };
 
 } // namespace diratlas::tui

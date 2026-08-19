@@ -6,16 +6,64 @@
 // Licensed under the GNU Affero General Public License v3.0
 // (https://www.gnu.org/licenses/agpl-3.0.txt).
 //
-// Originally based on godap (github.com/Macmod/godap) — MIT license.
 
 #include "attrs.h"
+#include "../ldapcore/attrs.h"
+#include "../ad/format.h"
 #include <ncurses.h>
 #include <ctime>
 #include <algorithm>
 #include <set>
 #include <cstring>
+#include <cstdio>
 
 namespace diratlas::tui {
+
+/** @brief strftime pattern used for timestamp rendering in the TUI. */
+static const char *const kTuiTimeFormat = "%Y-%m-%d %H:%M:%S";
+
+/** @brief Empty byte-vector placeholder for attributes without binary data. */
+static const std::vector<std::vector<uint8_t>> emptyBytes;
+
+/** @brief Lowercase a copy of an attribute name (formatters match lower-case names). */
+static std::string lowerName(std::string s) {
+    for (char &c : s)
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+    return s;
+}
+
+/** @brief Human-readable media label for known binary attributes, or nullptr. */
+static const char *mediaLabelFor(const std::string &lower) {
+    static const std::map<std::string, const char *> media = {
+        {"jpegphoto", "image/jpeg"}, {"photo", "image/jpeg"}, {"jpeg", "image/jpeg"},
+        {"thumbnailphoto", "image/jpeg"}, {"logo", "image"}, {"audio", "audio"},
+        {"video", "video"}, {"usercertificate", "x509-certificate"},
+        {"cacertificate", "x509-certificate"}, {"crosscertificatepair", "x509-cert-pair"},
+        {"usersmimecertificate", "smime-certificate"},
+    };
+    auto it = media.find(lower);
+    return it == media.end() ? nullptr : it->second;
+}
+
+/** @brief Collapse AD entries sharing the same raw value (bitmask flags expand to one entry per flag). */
+static std::vector<std::string> mergeAdEntries(const std::vector<diratlas::ad::AdAttrValue> &entries) {
+    std::vector<std::string> out;
+    std::string curRaw;
+    std::string cur;
+    for (const auto &e : entries) {
+        if (!cur.empty() && e.raw != curRaw) { out.push_back(cur); cur.clear(); }
+        if (cur.empty()) curRaw = e.raw;
+        if (!cur.empty()) cur += " | ";
+        cur += e.formatted;
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+
+/** @brief Text actually rendered for a row (formatted display, else raw value). */
+static const std::string &displayOf(const AttrRow &row) {
+    return row.display.empty() ? row.value : row.display;
+}
 
 /** @brief Check if an attribute name is a recognised LDAP timestamp field. */
 static bool isTimestampAttr(const std::string &name) {
@@ -187,6 +235,64 @@ static std::string parseSUP(const std::string &ocDef) {
     return ocDef.substr(p, end - p);
 }
 
+/// @brief Extract the NAME field from an objectClass schema definition.
+static std::string parseOCName(const std::string &ocDef) {
+    auto namePos = ocDef.find(" NAME '");
+    if (namePos == std::string::npos) {
+        namePos = ocDef.find(" NAME \"");
+        if (namePos == std::string::npos) return "";
+    }
+    namePos += 7; // skip " NAME '"
+    auto nameEnd = ocDef.find('\'', namePos);
+    if (nameEnd == std::string::npos) nameEnd = ocDef.find('"', namePos);
+    if (nameEnd == std::string::npos) return "";
+    return ocDef.substr(namePos, nameEnd - namePos);
+}
+
+std::vector<std::string> listObjectClasses(LDAPConn &conn) {
+    std::vector<std::string> names;
+    auto rootDSE = conn.searchOne("", "(objectClass=*)", {"subschemaSubentry"}, false);
+    auto subschemaDN = rootDSE.getAttr("subschemaSubentry");
+    if (subschemaDN.empty()) return names;
+    auto subschema = conn.searchOne(subschemaDN, "(objectClass=*)", {"objectClasses"}, false);
+    auto allDefs = subschema.getAttrs("objectClasses");
+    for (const auto &def : allDefs) {
+        std::string name = parseOCName(def);
+        if (!name.empty()) names.push_back(name);
+    }
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    return names;
+}
+
+std::set<std::string> getInheritedMandatoryAttrs(LDAPConn &conn,
+                                                  const std::string &objectClass) {
+    std::set<std::string> result;
+    if (objectClass.empty()) return result;
+    auto rootDSE = conn.searchOne("", "(objectClass=*)", {"subschemaSubentry"}, false);
+    auto subschemaDN = rootDSE.getAttr("subschemaSubentry");
+    if (subschemaDN.empty()) return result;
+    auto subschema = conn.searchOne(subschemaDN, "(objectClass=*)", {"objectClasses"}, false);
+    auto allDefs = subschema.getAttrs("objectClasses");
+
+    // Walk the SUP chain (person → inetOrgPerson → ...) collecting each
+    // ancestor's MUST attributes so required fields are all prefilled.
+    std::string cur = objectClass;
+    std::set<std::string> visited;
+    while (!cur.empty() && visited.insert(cur).second) {
+        bool found = false;
+        for (const auto &def : allDefs) {
+            if (parseOCName(def) != cur) continue;
+            parseMUST(def, result);
+            cur = parseSUP(def);
+            found = true;
+            break;
+        }
+        if (!found) break;
+    }
+    return result;
+}
+
 /**
  * @brief Build hierarchy depth for each objectClass by walking SUP chains.
  *
@@ -275,6 +381,7 @@ OCSchemaInfo loadOCSchema(LDAPConn &conn) {
  */
 void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mandatory,
                         const std::map<std::string, int> *ocDepths) {
+    (void)ocDepths;  // schema depths kept for future sorting; unused today
     entry_ = entry;
     rows_.clear();
     maxNameW_ = 0;
@@ -303,17 +410,61 @@ void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mand
         bool op = isOperationalAttr(attrName);
         bool mand = mandatory.count(attrName) > 0;
 
-        for (const auto &val : it->second) {
+        const std::string lower = lowerName(attrName);
+        const auto bit = entry.binaryAttributes.find(attrName);
+        const std::vector<std::vector<uint8_t>> &byteVals =
+            (bit == entry.binaryAttributes.end()) ? emptyBytes : bit->second;
+
+        // Per-value display strings (formatters expect lower-cased attribute names)
+        std::vector<std::string> disp;
+        if (flavor_ == LDAPFlavor::MicrosoftAD && diratlas::ad::isAdAttribute(lower)) {
+            disp = mergeAdEntries(diratlas::ad::formatAdAttribute(
+                lower, it->second, byteVals, kTuiTimeFormat, 0));
+        } else {
+            auto gen = diratlas::ldapcore::formatAttribute(lower, it->second, byteVals, kTuiTimeFormat);
+            for (const auto &g : gen)
+                disp.push_back(g.formatted);
+        }
+
+        for (size_t vi = 0; vi < it->second.size(); ++vi) {
             AttrRow row;
             row.name = attrName;
-            row.value = val;
-            // Try base64 decoding for printable values
-            std::string dec = maybeDecodeBase64(val);
-            if (!dec.empty() && dec != val)
-                row.value = "<b64> " + dec;
+            row.value = it->second[vi];
             row.operational = op;
             row.mandatory = mand;
             row.attrName = attrName;
+
+            // Media attributes keep a compact label instead of the raw binary
+            std::string showText;
+            if (const char *label = mediaLabelFor(lower)) {
+                size_t n = (vi < byteVals.size()) ? byteVals[vi].size() : row.value.size();
+                if (n > 0) {
+                    char buf[96];
+                    std::snprintf(buf, sizeof(buf), "[%s, %zu bytes]", label, n);
+                    showText = buf;
+                }
+            }
+            if (showText.empty()) {
+                showText = (vi < disp.size()) ? disp[vi] : row.value;
+                if (showText == row.value) {
+                    // Try base64 decoding for printable values
+                    std::string dec = maybeDecodeBase64(row.value);
+                    if (!dec.empty() && dec != row.value)
+                        showText = "<b64> " + dec;
+                }
+                // Large untyped binary blobs collapse to a compact placeholder
+                if (showText.compare(0, 4, "HEX{") == 0) {
+                    size_t n = (vi < byteVals.size()) ? byteVals[vi].size() : row.value.size();
+                    if (n > 1024) {
+                        char buf[96];
+                        std::snprintf(buf, sizeof(buf), "[octet-stream, %zu bytes]", n);
+                        showText = buf;
+                    }
+                }
+            }
+            if (showText != row.value)
+                row.display = showText;
+
             groups[attrName].vals.push_back(row);
             groups[attrName].op = op;
             groups[attrName].mand = mand;
@@ -598,23 +749,6 @@ static void drawSchemaValue(WINDOW *win, int y, int x, int maxW,
     }
     }
 
-/** @brief Build visual line mapping for word-wrapped attribute values. */
-struct VInfo { int vstart; int vlines; };
-static std::vector<VInfo> buildVInfo(const std::vector<AttrRow> &rows, int valW) {
-    std::vector<VInfo> vi;
-    int v = 0;
-    for (const auto &r : rows) {
-        int lines = 1;
-        if (!r.isToggle && valW > 10) {
-            int needed = (static_cast<int>(r.value.size()) + valW - 1) / valW;
-            if (needed > 1) lines = needed;
-        }
-        vi.push_back({v, lines});
-        v += lines;
-    }
-    return vi;
-}
-
 /**
  * @brief Render the attributes panel into an ncurses window.
  *
@@ -667,7 +801,7 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
         for (const auto &r : rows_) {
             int lines = 1;
             if (!r.isToggle && valW > 10) {
-                int needed = (static_cast<int>(r.value.size()) + valW - 1) / valW;
+                int needed = (static_cast<int>(displayOf(r).size()) + valW - 1) / valW;
                 if (needed > 1) lines = needed;
             }
             vinfo.push_back({v, lines});
@@ -729,7 +863,7 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
         }
 
         bool matchSearch = !searchStr_.empty() && !row.isToggle
-            && (row.value.find(searchStr_) != std::string::npos
+            && (displayOf(row).find(searchStr_) != std::string::npos
              || row.name.find(searchStr_) != std::string::npos);
         bool useSyntaxHL = !row.isToggle && !matchSearch;
 
@@ -763,12 +897,13 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
             }
 
             // Value segment for this wrapped line
+            const std::string &showText = displayOf(row);
             int segOff = L * valW;
             std::string seg;
-            if (segOff < static_cast<int>(row.value.size())) {
-                int segLen = static_cast<int>(row.value.size()) - segOff;
+            if (segOff < static_cast<int>(showText.size())) {
+                int segLen = static_cast<int>(showText.size()) - segOff;
                 if (segLen > valW) segLen = valW;
-                seg = row.value.substr(segOff, segLen);
+                seg = showText.substr(segOff, segLen);
             }
 
             if (useSyntaxHL && !seg.empty()) {

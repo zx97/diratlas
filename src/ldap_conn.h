@@ -6,7 +6,6 @@
 // Licensed under the GNU Affero General Public License v3.0
 // (https://www.gnu.org/licenses/agpl-3.0.txt).
 //
-// Originally based on godap (github.com/Macmod/godap) — MIT license.
 
 #pragma once
 #include <string>
@@ -17,7 +16,6 @@
 #include <ldap.h>
 
 #include "vars.h"
-#include "adidns/types.h"
 
 namespace diratlas {
 
@@ -46,9 +44,8 @@ struct LDAPEntry {
 /**
  * @brief Wrapper around OpenLDAP's libldap for LDAP operations.
  *
- * Manages connection lifecycle, authentication, search, CRUD,
- * group membership, Active Directory DNS, security descriptors,
- * and schema introspection.
+ * Manages connection lifecycle, authentication, search and CRUD
+ * operations against an LDAP server.
  */
 class LDAPConn {
 public:
@@ -57,85 +54,79 @@ public:
 
     // ── Connection ────────────────────────────────────────
     /** @brief Initialise an LDAP session handle and apply TLS options. */
-    bool connect(const std::string &uri,
-                 bool insecure, const std::string &socksProxy = "");
+    bool connect(const std::string &uri, const std::string &socksProxy = "");
     /** @brief Negotiate StartTLS on an existing connection. */
     bool startTLS();
+    /** @brief Set the LDAP protocol version (2 or 3). */
+    void setProtocolVersion(int version) { ldapVersion = version; }
 
     // ── Authentication ────────────────────────────────────
     /** @brief Alias for simpleBind(). */
     bool bind(const std::string &username, const std::string &password);
     /** @brief Simple (username/password) SASL bind. */
     bool simpleBind(const std::string &username, const std::string &password);
-    /** @brief SASL EXTERNAL bind (client certificate). */
-    bool externalBind();
     /** @brief SASL interactive bind for arbitrary mechanisms (GSSAPI, etc.). */
-    bool saslBind(const std::string &mech, const std::string &authzId = "");
+    bool saslBind(const std::string &mech, const std::string &authzId = "",
+                  const std::string &authcid = "", const std::string &realm = "",
+                  const std::string &secprops = "", bool noCanon = false,
+                  bool interactive = false);
+
+    // ── Extended operations ───────────────────────────────
+    /** @brief RFC 4532 "Who am I?": return the server-reported authzID. */
+    std::string whoAmI();
+    /** @brief RFC 3062 Password Modify. Returns generated password if requested. */
+    bool passwordModify(const std::string &user, const std::string &oldPw,
+                        const std::string &newPw, std::string &generatedPw);
+    /** @brief RFC 3909 Cancel an in-flight operation by its message ID. */
+    bool cancelOperation(int msgid);
+    /** @brief Send an arbitrary extended request and read its response value. */
+    bool extendedOp(const std::string &oid, const std::vector<uint8_t> &req,
+                    std::vector<uint8_t> &res);
 
     // ── Search / Query ────────────────────────────────────
     /** @brief Perform an LDAP search with paging and control support. */
     bool search(const std::string &baseDN, int scope, const std::string &filter,
                 const std::vector<std::string> &attrs, bool showDeleted,
-                std::vector<LDAPEntry> &results);
+                std::vector<LDAPEntry> &results, bool attrsonly = false);
     /** @brief Convenience: base-scope search returning a single entry. */
     LDAPEntry searchOne(const std::string &baseDN, const std::string &filter,
                          const std::vector<std::string> &attrs, bool showDeleted);
 
     /** @brief Auto-detect the root DN from namingContexts. */
     bool findRootDN(std::string &rootDN);
-    /** @brief Retrieve all namingContexts from RootDSE. */
+    /** @brief Fetch the list of namingContexts from the RootDSE. */
     std::vector<std::string> findNamingContexts();
-    /** @brief Extract the DNS domain (FQDN) from RootDSE attributes. */
-    std::string findRootFQDN();
     /** @brief Detect backend flavour (MicrosoftAD vs BasicLDAP). */
     void guessFlavor();
-
-    // ── Group Operations ──────────────────────────────────
-    bool queryGroupMembers(const std::string &groupDN, std::vector<LDAPEntry> &members);
-    bool queryGroupMembersDeep(const std::string &groupDN, int maxDepth, std::vector<LDAPEntry> &members);
-    bool queryObjectGroups(const std::string &objectDN, std::vector<LDAPEntry> &groups);
-    bool addMemberToGroup(const std::string &memberDN, const std::string &groupDN);
-    bool removeMemberFromGroup(const std::string &memberDN, const std::string &groupDN);
 
     // ── Object CRUD ───────────────────────────────────────
     bool deleteObject(const std::string &dn);
     bool addAttribute(const std::string &dn, const std::string &attr, const std::vector<std::string> &values);
     bool modifyAttribute(const std::string &dn, const std::string &attr, const std::vector<std::string> &values);
     bool deleteAttribute(const std::string &dn, const std::string &attr);
-    bool deleteAttributeValues(const std::string &dn, const std::string &attr, const std::vector<std::string> &values);
-    bool moveObject(const std::string &sourceDN, const std::string &targetDN);
-    bool resetPassword(const std::string &dn, const std::string &newPassword);
+    /** @brief Remove a single value of an attribute (LDAP_MOD_DELETE with value). */
+    bool deleteAttributeValue(const std::string &dn, const std::string &attr,
+                              const std::string &value);
+    /** @brief Atomically replace one value of an attribute (DELETE old + ADD new). */
+    bool replaceAttributeValue(const std::string &dn, const std::string &attr,
+                               const std::string &oldValue, const std::string &newValue);
+
+    // ── Object Naming (moddn) ─────────────────────────────
+    /**
+     * @brief Rename and/or move an entry (RFC 4511 ModifyDN).
+     *
+     * @param dn            Current distinguished name of the entry.
+     * @param newRdn        New RDN, e.g. "cn=newname" (no parent part).
+     * @param deleteOldRdn  True to delete the old RDN attribute value from the entry.
+     * @param newSuperior   New parent DN, or "" to keep the entry under its
+     *                      current parent (rename only).
+     * @return true on success; on failure getLastError() holds the message.
+     */
+    bool renameObject(const std::string &dn, const std::string &newRdn,
+                      bool deleteOldRdn, const std::string &newSuperior = "");
 
     // ── Object Creation ───────────────────────────────────
     bool addObject(const std::string &dn, const std::map<std::string, std::vector<std::string>> &attrs);
-    bool addGroup(const std::string &name, const std::string &parentDN);
-    bool addOU(const std::string &name, const std::string &parentDN);
-    bool addUser(const std::string &name, const std::string &parentDN);
-    bool addComputer(const std::string &name, const std::string &parentDN);
-    bool addContainer(const std::string &name, const std::string &parentDN);
-
-    // ── Security Descriptor ───────────────────────────────
-    bool getSecurityDescriptor(const std::string &object, std::string &hexSD);
-    bool modifyDACL(const std::string &object, const std::string &newSD);
-
-    // ── Schema ────────────────────────────────────────────
-    bool findSchemaClassesAndAttributes(std::map<std::string, std::string> &classes,
-                                         std::map<std::string, std::string> &attrs);
-
-    // ── AD Integrated DNS ─────────────────────────────────
-    bool getADIDNSZones(const std::string &name, bool isForest, std::vector<adidns::DNSZone> &zones);
-    bool getADIDNSNode(const std::string &nodeDN, adidns::DNSNode &node);
-    bool getADIDNSNodes(const std::string &zoneDN, std::vector<adidns::DNSNode> &nodes);
-    bool addADIDNSZone(const std::string &name, const std::vector<adidns::DNSProperty> &props, bool isForest);
-    bool addADIDNSNode(const std::string &nodeName, const std::string &zoneDN,
-                        const std::vector<adidns::DNSRecord> &records);
-    bool addADIDNSRecords(const std::string &nodeDN, const std::vector<adidns::DNSRecord> &records);
-    bool replaceADIDNSRecords(const std::string &nodeDN, const std::vector<adidns::DNSRecord> &records);
-
-    // ── SID Resolution ────────────────────────────────────
-    std::string findSIDForObject(const std::string &object);
-    std::string findSamForSID(const std::string &sid);
-    std::string findFirstAttr(const std::string &filter, const std::string &attr);
 
     // ── Options ───────────────────────────────────────────
     /** @brief Set alias dereferencing policy. */
@@ -155,7 +146,6 @@ public:
         std::vector<uint8_t> value;       ///< Opaque control value
     };
     void addControl(const LdapControl &ctrl);
-    void clearControls();
     std::vector<LdapControl> &controls() { return ctrls_; }
 
     /** @brief Build a LDAPControl** array from ctrls_ (caller must free). */
@@ -166,14 +156,36 @@ public:
                                   std::string &oid, bool &critical,
                                   std::vector<uint8_t> &value);
 
+    /**
+     * @brief Parse and register an OpenLDAP-compatible -e / -E extension.
+     *
+     * Must be called after connect() (the underlying LDAP handle is needed to
+     * build controls). Supports the same extensions as OpenLDAP's ldapsearch:
+     * assert, authzid, bauthzid, chaining, dontUseCopy, manageDSAit, noop,
+     * ppolicy, postread, preread, proxydn, proxyauthz, relax, sessiontracking,
+     * tz, domainScope, mv, pr, ps, sss, subentries, sync, vlv, deref, dirSync,
+     * extendedDn, showDeleted, serverNotif, accountUsability, effectiverights,
+     * realAttributesOnly, virtualAttributesOnly, transactionID, and generic
+     * "[!]<oid>[=:<value>|=::<b64>]".
+     *
+     * @param spec  Raw -e/-E argument.
+     * @param error Filled with a human-readable error on failure.
+     * @return true on success, false with `error` set otherwise.
+     */
+    bool addControlSpec(const std::string &spec, std::string &error);
+
     /// Detected backend flavour
     LDAPFlavor flavor{LDAPFlavor::MicrosoftAD};
     /// Default root DN for searches
     std::string defaultRootDN;
     /// LDAP paging size
     uint32_t pagingSize{800};
+    /// Search size limit (number of entries; 0 = unlimited, -z)
+    int sizelimit{0};
     /// Operation time limit in seconds
     int timelimit{10};
+    /// Network connect timeout in seconds (0 = libldap default, -o nettimeout)
+    int networkTimeout{0};
     /// Last LDAP error code
     int lastErrno{0};
     /// Last LDAP error message
@@ -182,20 +194,6 @@ public:
     const std::string &getLastError() const { return lastError; }
     int getLastErrno() const { return lastErrno; }
 
-    // ── Static Helpers ────────────────────────────────────
-    static std::string escapeFilter(const std::string &filter);
-    static std::string samOrDN(const std::string &object, bool &isSam);
-    static std::string cnUidOrDN(const std::string &object, bool &isCnOrUid);
-    static std::string guessQueryFilter(const std::string &identifier, LDAPFlavor flavor);
-
-private:
-    LDAP *ld{nullptr};                     ///< libldap session handle
-    bool connected{false};
-    int debug_{0};
-    int ldapVersion{LDAP_VERSION3};
-    std::vector<LdapControl> ctrls_;
-
-public:
     /** @brief TLS configuration (filled from ldaprc, applied inside connect()). */
     struct {
         std::string cacert;      ///< CA certificate file path
@@ -205,9 +203,12 @@ public:
         int reqcert{-1};         ///< Certificate requirement level (-1 = unset)
     } tlsOpts;
 
-    bool buildSearchRequest(const std::string &baseDN, int scope, const std::string &filter,
-                            const std::vector<std::string> &attrs, bool showDeleted,
-                            LDAPControl ***srvCtrls, std::string &attrsStr);
+private:
+    LDAP *ld{nullptr};                     ///< libldap session handle
+    bool connected{false};
+    int debug_{0};
+    int ldapVersion{LDAP_VERSION3};
+    std::vector<LdapControl> ctrls_;
 };
 
 } // namespace diratlas
