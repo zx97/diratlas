@@ -569,10 +569,17 @@ void App::draw() {
         for (int i = 0; i < activeMenu_; i++)
             mx += static_cast<int>(menus[i].label.size());
         int my = 1;
-        int mw = 28;
-        int items = 0;
+        // Size the dropdown to the widest item label so nothing is truncated.
+        int mw = static_cast<int>(menu.label.size()) + 4;
         for (const auto &item : menu.items)
-            if (!item.label.empty()) items++;
+            if (!item.label.empty())
+                mw = std::max(mw, static_cast<int>(item.label.size()) + 4);
+        if (mw > getmaxx(stdscr) - mx - 2)
+            mw = getmaxx(stdscr) - mx - 2;
+        int items = 0;
+        // Count every row (including separators / empty labels) because the
+        // draw loop increments dy for empty items too.
+        for (const auto &item : menu.items) items++;
         int mh = items + 2;
         // Clamp to fit screen
         if (my + mh >= LINES) mh = LINES - my - 1;
