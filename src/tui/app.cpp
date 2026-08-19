@@ -579,7 +579,7 @@ void App::draw() {
         int items = 0;
         // Count every row (including separators / empty labels) because the
         // draw loop increments dy for empty items too.
-        for (const auto &item : menu.items) items++;
+        items = static_cast<int>(menu.items.size());
         int mh = items + 2;
         // Clamp to fit screen
         if (my + mh >= LINES) mh = LINES - my - 1;
