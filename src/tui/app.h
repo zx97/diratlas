@@ -97,7 +97,12 @@ private:
     /** @brief Show a modal keyboard-help popup; blocks until any key. */
     void showHelp();
     /** @brief Show a modal popup with the decoded content of a value (e.g. base64). */
-    void showValuePopup(const std::string &title, const std::string &content);
+    void showValuePopup(const std::string &title, const std::string &content,
+                        const std::string &attrName, const std::string &dn);
+    /** @brief Modal multi-line text editor; returns true if confirmed (content updated). */
+    bool editTextPopup(const std::string &title, std::string &content);
+    /** @brief Validate a decoded ppm (pwdCheckModuleArg) config for syntax errors. */
+    static std::string validatePpmConfig(const std::string &content);
     void drawMenuBar();
     void drawInputBar();
     void drawStatusBar();

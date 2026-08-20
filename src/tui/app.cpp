@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <chrono>
 #include <fstream>
+#include <sstream>
 #include <thread>
 
 namespace diratlas::tui {
@@ -1100,9 +1101,12 @@ void App::handleKey(int ch) {
         // Check if a DN was selected for navigation
 
         if (attrs_->goToDN_.find("VIEWB64:") == 0) {
-            std::string content = attrs_->goToDN_.substr(8);
+            std::string rest = attrs_->goToDN_.substr(8);
             attrs_->goToDN_.clear();
-            showValuePopup("Decoded value", content);
+            auto sep = rest.find('|');
+            std::string attr = (sep == std::string::npos) ? "" : rest.substr(0, sep);
+            std::string content = (sep == std::string::npos) ? rest : rest.substr(sep + 1);
+            showValuePopup("Decoded value", content, attr, currentDN_);
         } else if (!attrs_->goToDN_.empty() && attrs_->goToDN_ != "APPLY_EDIT" && attrs_->goToDN_.find("CONFIRM:") != 0) {
             std::string targetDN = attrs_->goToDN_;
             attrs_->goToDN_.clear();
@@ -1346,10 +1350,133 @@ void App::showHelp() {
     draw();
 }
 
-void App::showValuePopup(const std::string &title, const std::string &content) {
+void App::showValuePopup(const std::string &title, const std::string &content,
+                         const std::string &attrName, const std::string &dn) {
     timeout(-1);  // blocking input for the popup
 
-    // Split content into lines (preserving embedded newlines).
+    std::string current = content;
+    bool edited = false;
+
+    for (;;) {
+        // Split content into lines (preserving embedded newlines).
+        std::vector<std::string> lines;
+        {
+            std::string cur;
+            for (char c : current) {
+                if (c == '\n') { lines.push_back(cur); cur.clear(); }
+                else cur += c;
+            }
+            lines.push_back(cur);
+        }
+
+        // Popup sized to fit content, capped to the terminal.
+        int cols = 72;
+        int maxRows = LINES - 4;
+        int rows = std::min<int>(maxRows, static_cast<int>(lines.size()) + 5);
+        if (rows < 7) rows = 7;
+        int sy = (LINES - rows) / 2;
+        int sx = (COLS - cols) / 2;
+        if (sy < 0) sy = 0;
+        if (sx < 0) sx = 0;
+
+        int scroll = 0;
+        int contentH = rows - 3;
+        for (;;) {
+            wattron(stdscr, COLOR_PAIR(CP_BORDER) | A_BOLD);
+            for (int r = 0; r < rows; r++)
+                for (int c = 0; c < cols; c++)
+                    mvwaddch(stdscr, sy + r, sx + c, ' ');
+            wattroff(stdscr, COLOR_PAIR(CP_BORDER) | A_BOLD);
+            for (int c = 1; c < cols - 1; c++) {
+                mvwaddch(stdscr, sy, sx + c, '-');
+                mvwaddch(stdscr, sy + rows - 1, sx + c, '-');
+            }
+            for (int r = 1; r < rows - 1; r++) {
+                mvwaddch(stdscr, sy + r, sx, '|');
+                mvwaddch(stdscr, sy + r, sx + cols - 1, '|');
+            }
+            mvwaddch(stdscr, sy, sx, '+'); mvwaddch(stdscr, sy, sx + cols - 1, '+');
+            mvwaddch(stdscr, sy + rows - 1, sx, '+'); mvwaddch(stdscr, sy + rows - 1, sx + cols - 1, '+');
+            wattron(stdscr, COLOR_PAIR(CP_HEADER) | A_BOLD);
+            mvwaddstr(stdscr, sy, sx + 2, (" " + title + " ").c_str());
+            wattroff(stdscr, COLOR_PAIR(CP_HEADER) | A_BOLD);
+
+            int fy = sy + 1;
+            int lineEnd = std::min<int>(static_cast<int>(lines.size()), scroll + contentH);
+            for (int i = scroll; i < lineEnd && fy < sy + rows - 1; i++, fy++) {
+                std::string seg = lines[i];
+                if (static_cast<int>(seg.size()) > cols - 2)
+                    seg = seg.substr(0, cols - 2);
+                mvwaddstr(stdscr, fy, sx + 1, seg.c_str());
+            }
+
+            // Bottom bar: [Edit] button (only when writable) + hints
+            int hintY = sy + rows - 2;
+            std::string hints = "Esc=close";
+            if (!attrName.empty() && !dn.empty()) {
+                hints += "   [Enter Edit]  F2=edit";
+            }
+            if (static_cast<int>(lines.size()) > contentH)
+                hints += "   Up/Dn=scroll  (" + std::to_string(scroll + 1) + "-" +
+                        std::to_string(lineEnd) + "/" + std::to_string(lines.size()) + ")";
+            wattron(stdscr, COLOR_PAIR(CP_ATTR_OP));
+            mvwaddstr(stdscr, hintY, sx + 2, hints.c_str());
+            wattroff(stdscr, COLOR_PAIR(CP_ATTR_OP));
+
+            wnoutrefresh(stdscr);
+            doupdate();
+
+            int ch = getch();
+            if (ch == 27 || ch == 'q' || ch == 'Q') goto done;
+            if (ch == KEY_UP && scroll > 0) scroll--;
+            if (ch == KEY_DOWN && scroll + contentH < static_cast<int>(lines.size())) scroll++;
+            // Edit button / F2: open the multi-line editor on the decoded text.
+            if (!attrName.empty() && !dn.empty() &&
+                (ch == '\n' || ch == '\r' || ch == KEY_ENTER || ch == KEY_F(2))) {
+                std::string editedContent = current;
+                if (editTextPopup("Edit " + attrName + " (decoded)", editedContent)) {
+                    current = editedContent;
+                    edited = true;
+                    break;  // redraw the popup with the new content
+                }
+            }
+        }
+
+        // After editing, offer to write the change back (re-encoded in base64).
+        if (edited) {
+            // Validate syntax before proposing the write.
+            std::string err;
+            if (attrName == "pwdCheckModuleArg")
+                err = validatePpmConfig(current);
+            if (!err.empty()) {
+                setLog("Edit rejected: " + err);
+                break;
+            }
+            // Re-encode and write on the worker thread.
+            std::string newB64 = diratlas::ldapcore::base64Encode(current);
+            std::vector<std::string> newVals = {newB64};
+            runWriteOp([this, dn, attrName, newVals]() {
+                            return conn_->modifyAttribute(dn, attrName, newVals);
+                        },
+                        "Updated " + attrName + " (base64 re-encoded)", "Update failed",
+                        false, true);
+            break;
+        }
+    }
+done:
+    timeout(100);
+    touchwin(stdscr);
+    touchwin(headerWin_); touchwin(inputWin_); touchwin(treeWin_);
+    touchwin(attrWin_); touchwin(statusWin_); touchwin(logWin_);
+    clear();
+    refresh();
+    draw();
+}
+
+bool App::editTextPopup(const std::string &title, std::string &content) {
+    timeout(-1);  // blocking input for the popup
+
+    // Represent the text as a list of lines for line-based editing.
     std::vector<std::string> lines;
     {
         std::string cur;
@@ -1359,20 +1486,27 @@ void App::showValuePopup(const std::string &title, const std::string &content) {
         }
         lines.push_back(cur);
     }
+    if (lines.empty()) lines.push_back("");
 
-    // Popup sized to fit content, capped to the terminal.
-    int cols = 72;
-    int maxRows = LINES - 4;
-    int rows = std::min<int>(maxRows, static_cast<int>(lines.size()) + 4);
-    if (rows < 6) rows = 6;
+    const int cols = 72;
+    const int rows = LINES - 6;
+    if (rows < 8) return false;
     int sy = (LINES - rows) / 2;
     int sx = (COLS - cols) / 2;
     if (sy < 0) sy = 0;
     if (sx < 0) sx = 0;
+    const int contentH = rows - 3;
 
+    int curLine = 0;
+    int curCol = static_cast<int>(lines[0].size());
     int scroll = 0;
-    int contentH = rows - 3;
+    curs_set(1);
+
     for (;;) {
+        if (curLine < scroll) scroll = curLine;
+        if (curLine >= scroll + contentH) scroll = curLine - contentH + 1;
+
+        // Border + title
         wattron(stdscr, COLOR_PAIR(CP_BORDER) | A_BOLD);
         for (int r = 0; r < rows; r++)
             for (int c = 0; c < cols; c++)
@@ -1392,40 +1526,123 @@ void App::showValuePopup(const std::string &title, const std::string &content) {
         mvwaddstr(stdscr, sy, sx + 2, (" " + title + " ").c_str());
         wattroff(stdscr, COLOR_PAIR(CP_HEADER) | A_BOLD);
 
-        int fy = sy + 1;
-        int lineEnd = std::min<int>(static_cast<int>(lines.size()), scroll + contentH);
-        for (int i = scroll; i < lineEnd && fy < sy + rows - 1; i++, fy++) {
-            std::string seg = lines[i];
-            if (static_cast<int>(seg.size()) > cols - 2)
-                seg = seg.substr(0, cols - 2);
-            mvwaddstr(stdscr, fy, sx + 1, seg.c_str());
+        // Draw lines (with line numbers)
+        for (int i = 0; i < contentH && scroll + i < static_cast<int>(lines.size()); i++) {
+            int fy = sy + 1 + i;
+            bool active = (scroll + i == curLine);
+            if (active) wattron(stdscr, COLOR_PAIR(CP_TREE_CURSOR));
+            std::string num = std::to_string(scroll + i + 1);
+            mvwaddstr(stdscr, fy, sx + 1, num.c_str());
+            std::string seg = lines[scroll + i];
+            if (static_cast<int>(seg.size()) > cols - 6)
+                seg = seg.substr(0, cols - 6);
+            mvwaddstr(stdscr, fy, sx + 4, seg.c_str());
+            if (active) wattroff(stdscr, COLOR_PAIR(CP_TREE_CURSOR));
         }
 
-        std::string hint = "Esc/Enter=close";
-        if (static_cast<int>(lines.size()) > contentH)
-            hint += "   Up/Dn=scroll  (" + std::to_string(scroll + 1) + "-" +
-                    std::to_string(lineEnd) + "/" + std::to_string(lines.size()) + ")";
+        // Bottom bar
         wattron(stdscr, COLOR_PAIR(CP_ATTR_OP));
+        std::string hint = "Enter=newline  Backspace=del  [F2 Save]  Esc=cancel";
         mvwaddstr(stdscr, sy + rows - 2, sx + 2, hint.c_str());
         wattroff(stdscr, COLOR_PAIR(CP_ATTR_OP));
 
         wnoutrefresh(stdscr);
         doupdate();
 
-        int ch = getch();
-        if (ch == 27 || ch == '\n' || ch == '\r' || ch == KEY_ENTER || ch == 'q' || ch == 'Q')
-            break;
-        if (ch == KEY_UP && scroll > 0) scroll--;
-        if (ch == KEY_DOWN && scroll + contentH < static_cast<int>(lines.size())) scroll++;
-    }
+        // Place the cursor on the current line/column
+        {
+            int cw = curCol;
+            if (cw > cols - 6) cw = cols - 6;
+            wmove(stdscr, sy + 1 + (curLine - scroll), sx + 4 + cw);
+        }
 
-    timeout(100);
-    touchwin(stdscr);
-    touchwin(headerWin_); touchwin(inputWin_); touchwin(treeWin_);
-    touchwin(attrWin_); touchwin(statusWin_); touchwin(logWin_);
-    clear();
-    refresh();
-    draw();
+        int ch = getch();
+        if (ch == 27) {  // Esc = cancel
+            curs_set(0); timeout(100); touchwin(stdscr); return false;
+        }
+        if (ch == KEY_F(2) || (ch == '\n' && false)) {  // F2 = save
+            // Rebuild content from lines.
+            std::string out;
+            for (size_t i = 0; i < lines.size(); i++) {
+                if (i) out += '\n';
+                out += lines[i];
+            }
+            content = out;
+            curs_set(0); timeout(100); touchwin(stdscr); return true;
+        }
+        if (ch == KEY_UP) { if (curLine > 0) curLine--; if (curLine < (int)lines.size()) curCol = std::min(curCol, (int)lines[curLine].size()); }
+        else if (ch == KEY_DOWN) { if (curLine + 1 < (int)lines.size()) { curLine++; curCol = std::min(curCol, (int)lines[curLine].size()); } }
+        else if (ch == KEY_LEFT) { if (curCol > 0) curCol--; }
+        else if (ch == KEY_RIGHT) { if (curCol < (int)lines[curLine].size()) curCol++; }
+        else if (ch == KEY_HOME) { curCol = 0; }
+        else if (ch == KEY_END) { curCol = (int)lines[curLine].size(); }
+        else if (ch == KEY_DC) {
+            if (curCol < (int)lines[curLine].size()) lines[curLine].erase(curCol, 1);
+            else if (curLine + 1 < (int)lines.size()) {
+                lines[curLine] += lines[curLine + 1];
+                lines.erase(lines.begin() + curLine + 1);
+            }
+        }
+        else if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
+            if (curCol > 0) { lines[curLine].erase(curCol - 1, 1); curCol--; }
+            else if (curLine > 0) {
+                curCol = (int)lines[curLine - 1].size();
+                lines[curLine - 1] += lines[curLine];
+                lines.erase(lines.begin() + curLine);
+                curLine--;
+            }
+        }
+        else if (ch == '\n' || ch == '\r') {  // split line
+            std::string right = lines[curLine].substr(curCol);
+            lines[curLine] = lines[curLine].substr(0, curCol);
+            lines.insert(lines.begin() + curLine + 1, right);
+            curLine++;
+            curCol = 0;
+        }
+        else if (ch >= 32 && ch <= 126) {  // printable char
+            lines[curLine].insert(curCol, 1, (char)ch);
+            curCol++;
+        }
+    }
+}
+
+std::string App::validatePpmConfig(const std::string &content) {
+    // Each non-empty, non-comment line must be: <param> <value> [min minForPoint max].
+    // class-* entries carry the extra numeric triple; plain params must be ints.
+    static const std::set<std::string> intParams = {
+        "minQuality", "checkRDN", "maxConsecutivePerClass", "useCracklib"
+    };
+    std::istringstream ss(content);
+    std::string line;
+    int lineno = 0;
+    while (std::getline(ss, line)) {
+        lineno++;
+        std::string t = line;
+        // Trim leading whitespace.
+        size_t b = t.find_first_not_of(" \t");
+        if (b == std::string::npos) continue;              // blank line
+        if (t[b] == '#') continue;                          // comment
+        std::istringstream ls(t.substr(b));
+        std::string param, value;
+        if (!(ls >> param)) return "line " + std::to_string(lineno) + ": missing parameter";
+        if (!(ls >> value)) {
+            // A parameter with no value is silently ignored by ppm (default
+            // applies); only class-* lines require a value.
+            if (param.compare(0, 6, "class-") == 0)
+                return "line " + std::to_string(lineno) + ": class '" + param + "' has no value";
+            continue;
+        }
+        if (param.compare(0, 6, "class-") == 0) {
+            int min, mfp, max;
+            if (!(ls >> min >> mfp >> max))
+                return "line " + std::to_string(lineno) + ": class '" + param + "' needs <value> <min> <minForPoint> <max>";
+        } else if (intParams.count(param)) {
+            std::string extra;
+            if (ls >> extra)
+                return "line " + std::to_string(lineno) + ": parameter '" + param + "' takes a single value";
+        }
+    }
+    return "";
 }
 
 int App::appPopupForm(const std::string &title,

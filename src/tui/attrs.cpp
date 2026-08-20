@@ -1134,7 +1134,7 @@ bool AttrsWidget::handleKey(int ch) {
             const std::string &val = rows_[selected_].value;
             std::string dec = maybeDecodeBase64(val);
             if (!dec.empty() && dec != val) {
-                goToDN_ = "VIEWB64:" + dec;
+                goToDN_ = "VIEWB64:" + rows_[selected_].name + "|" + dec;
                 return true;
             }
             // If value looks like a DN, load that entry
