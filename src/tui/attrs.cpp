@@ -452,6 +452,11 @@ void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mand
                     if (!dec.empty() && dec != row.value)
                         showText = "<b64> " + dec;
                 }
+                // The panel wraps by width, not by embedded newlines, so strip
+                // any newlines/carriage returns from the display text (the full
+                // decoded value with newlines is shown in the Enter popup).
+                for (auto &c : showText)
+                    if (c == '\n' || c == '\r') c = ' ';
                 // Large untyped binary blobs collapse to a compact placeholder
                 if (showText.compare(0, 4, "HEX{") == 0) {
                     size_t n = (vi < byteVals.size()) ? byteVals[vi].size() : row.value.size();
@@ -614,12 +619,14 @@ static std::string maybeDecodeBase64(const std::string &val) {
             dec += static_cast<char>((buf >> bits) & 0xFF);
         }
     }
-    // Check result is printable and doesn't look like garbage
+    // Check result is printable and doesn't look like garbage.
+    // UTF-8 multi-byte text (bytes >= 0x80) is treated as printable so
+    // decoded config files with accents (e.g. pwdCheckModuleArg) pass.
     if (dec.empty()) return "";
     int printable = 0;
     for (unsigned char c : dec) {
-        if (c >= 32 && c < 127) printable++;
-        else if (c != '\n' && c != '\t' && c != '\r') return "";
+        if (c >= 32 || c == '\n' || c == '\t' || c == '\r') printable++;
+        else return "";  // binary control byte -> not text
     }
     // At least 80% must be printable ASCII (reject binary garbage)
     if (printable * 5 < static_cast<int>(dec.size()) * 4) return "";
@@ -1122,8 +1129,15 @@ bool AttrsWidget::handleKey(int ch) {
                 restoreTogglePos();
                 return true;
             }
-            // If value looks like a DN, load that entry
+            // If the raw value is base64 that decodes to readable text, open
+            // a popup with the decoded content (e.g. pwdCheckModuleArg).
             const std::string &val = rows_[selected_].value;
+            std::string dec = maybeDecodeBase64(val);
+            if (!dec.empty() && dec != val) {
+                goToDN_ = "VIEWB64:" + dec;
+                return true;
+            }
+            // If value looks like a DN, load that entry
             if (val.find('=') != std::string::npos && val.find(',') != std::string::npos) {
                 goToDN_ = val;
                 return true;

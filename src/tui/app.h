@@ -96,6 +96,8 @@ private:
                     int &sel);
     /** @brief Show a modal keyboard-help popup; blocks until any key. */
     void showHelp();
+    /** @brief Show a modal popup with the decoded content of a value (e.g. base64). */
+    void showValuePopup(const std::string &title, const std::string &content);
     void drawMenuBar();
     void drawInputBar();
     void drawStatusBar();

@@ -1099,7 +1099,11 @@ void App::handleKey(int ch) {
         }
         // Check if a DN was selected for navigation
 
-        if (!attrs_->goToDN_.empty() && attrs_->goToDN_ != "APPLY_EDIT" && attrs_->goToDN_.find("CONFIRM:") != 0) {
+        if (attrs_->goToDN_.find("VIEWB64:") == 0) {
+            std::string content = attrs_->goToDN_.substr(8);
+            attrs_->goToDN_.clear();
+            showValuePopup("Decoded value", content);
+        } else if (!attrs_->goToDN_.empty() && attrs_->goToDN_ != "APPLY_EDIT" && attrs_->goToDN_.find("CONFIRM:") != 0) {
             std::string targetDN = attrs_->goToDN_;
             attrs_->goToDN_.clear();
             // Try to load the DN entry
@@ -1333,6 +1337,88 @@ void App::showHelp() {
     wnoutrefresh(stdscr);
     doupdate();
     getch();
+    timeout(100);
+    touchwin(stdscr);
+    touchwin(headerWin_); touchwin(inputWin_); touchwin(treeWin_);
+    touchwin(attrWin_); touchwin(statusWin_); touchwin(logWin_);
+    clear();
+    refresh();
+    draw();
+}
+
+void App::showValuePopup(const std::string &title, const std::string &content) {
+    timeout(-1);  // blocking input for the popup
+
+    // Split content into lines (preserving embedded newlines).
+    std::vector<std::string> lines;
+    {
+        std::string cur;
+        for (char c : content) {
+            if (c == '\n') { lines.push_back(cur); cur.clear(); }
+            else cur += c;
+        }
+        lines.push_back(cur);
+    }
+
+    // Popup sized to fit content, capped to the terminal.
+    int cols = 72;
+    int maxRows = LINES - 4;
+    int rows = std::min<int>(maxRows, static_cast<int>(lines.size()) + 4);
+    if (rows < 6) rows = 6;
+    int sy = (LINES - rows) / 2;
+    int sx = (COLS - cols) / 2;
+    if (sy < 0) sy = 0;
+    if (sx < 0) sx = 0;
+
+    int scroll = 0;
+    int contentH = rows - 3;
+    for (;;) {
+        wattron(stdscr, COLOR_PAIR(CP_BORDER) | A_BOLD);
+        for (int r = 0; r < rows; r++)
+            for (int c = 0; c < cols; c++)
+                mvwaddch(stdscr, sy + r, sx + c, ' ');
+        wattroff(stdscr, COLOR_PAIR(CP_BORDER) | A_BOLD);
+        for (int c = 1; c < cols - 1; c++) {
+            mvwaddch(stdscr, sy, sx + c, '-');
+            mvwaddch(stdscr, sy + rows - 1, sx + c, '-');
+        }
+        for (int r = 1; r < rows - 1; r++) {
+            mvwaddch(stdscr, sy + r, sx, '|');
+            mvwaddch(stdscr, sy + r, sx + cols - 1, '|');
+        }
+        mvwaddch(stdscr, sy, sx, '+'); mvwaddch(stdscr, sy, sx + cols - 1, '+');
+        mvwaddch(stdscr, sy + rows - 1, sx, '+'); mvwaddch(stdscr, sy + rows - 1, sx + cols - 1, '+');
+        wattron(stdscr, COLOR_PAIR(CP_HEADER) | A_BOLD);
+        mvwaddstr(stdscr, sy, sx + 2, (" " + title + " ").c_str());
+        wattroff(stdscr, COLOR_PAIR(CP_HEADER) | A_BOLD);
+
+        int fy = sy + 1;
+        int lineEnd = std::min<int>(static_cast<int>(lines.size()), scroll + contentH);
+        for (int i = scroll; i < lineEnd && fy < sy + rows - 1; i++, fy++) {
+            std::string seg = lines[i];
+            if (static_cast<int>(seg.size()) > cols - 2)
+                seg = seg.substr(0, cols - 2);
+            mvwaddstr(stdscr, fy, sx + 1, seg.c_str());
+        }
+
+        std::string hint = "Esc/Enter=close";
+        if (static_cast<int>(lines.size()) > contentH)
+            hint += "   Up/Dn=scroll  (" + std::to_string(scroll + 1) + "-" +
+                    std::to_string(lineEnd) + "/" + std::to_string(lines.size()) + ")";
+        wattron(stdscr, COLOR_PAIR(CP_ATTR_OP));
+        mvwaddstr(stdscr, sy + rows - 2, sx + 2, hint.c_str());
+        wattroff(stdscr, COLOR_PAIR(CP_ATTR_OP));
+
+        wnoutrefresh(stdscr);
+        doupdate();
+
+        int ch = getch();
+        if (ch == 27 || ch == '\n' || ch == '\r' || ch == KEY_ENTER || ch == 'q' || ch == 'Q')
+            break;
+        if (ch == KEY_UP && scroll > 0) scroll--;
+        if (ch == KEY_DOWN && scroll + contentH < static_cast<int>(lines.size())) scroll++;
+    }
+
     timeout(100);
     touchwin(stdscr);
     touchwin(headerWin_); touchwin(inputWin_); touchwin(treeWin_);
