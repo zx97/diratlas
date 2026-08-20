@@ -103,6 +103,14 @@ private:
     bool editTextPopup(const std::string &title, std::string &content);
     /** @brief Validate a decoded ppm (pwdCheckModuleArg) config for syntax errors. */
     static std::string validatePpmConfig(const std::string &content);
+    /**
+     * @brief Detect the decoded value's format and validate it.
+     * @return A validation warning/error message, or "" if valid.
+     *         Errors (blocking) are prefixed with "ERR: ", warnings (non-blocking)
+     *         otherwise.
+     */
+    static std::string detectAndValidateFormat(const std::string &content,
+                                               const std::string &attrName);
     void drawMenuBar();
     void drawInputBar();
     void drawStatusBar();

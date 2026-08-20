@@ -14,6 +14,7 @@
 #include "../ldapcore/dn.h"
 #include <ncurses.h>
 #include <locale.h>
+#include <cstring>
 #include <algorithm>
 #include <chrono>
 #include <fstream>
@@ -1444,13 +1445,23 @@ void App::showValuePopup(const std::string &title, const std::string &content,
 
         // After editing, offer to write the change back (re-encoded in base64).
         if (edited) {
-            // Validate syntax before proposing the write.
-            std::string err;
-            if (attrName == "pwdCheckModuleArg")
-                err = validatePpmConfig(current);
-            if (!err.empty()) {
-                setLog("Edit rejected: " + err);
+            // Detect format and validate before proposing the write.
+            std::string v = detectAndValidateFormat(current, attrName);
+            if (!v.empty() && v.compare(0, 4, "ERR:") == 0) {
+                setLog("Edit rejected: " + v.substr(4));
                 break;
+            }
+            if (!v.empty()) {
+                // Non-blocking warning: ask for explicit confirmation.
+                setLog("Warning: " + v + ".  Y to write anyway, N to cancel.");
+                timeout(-1);  // blocking confirmation prompt
+                // Redraw so the warning is visible before blocking on input.
+                draw();
+                for (;;) {
+                    int a = getch();
+                    if (a == 'y' || a == 'Y') break;
+                    if (a == 'n' || a == 'N' || a == 27) { setLog("Edit cancelled"); draw(); goto done; }
+                }
             }
             // Re-encode and write on the worker thread.
             std::string newB64 = diratlas::ldapcore::base64Encode(current);
@@ -1542,7 +1553,7 @@ bool App::editTextPopup(const std::string &title, std::string &content) {
 
         // Bottom bar
         wattron(stdscr, COLOR_PAIR(CP_ATTR_OP));
-        std::string hint = "Enter=newline  Backspace=del  [F2 Save]  Esc=cancel";
+        std::string hint = "Enter=newline  Backspace=del  [F2/Ctrl-X Save]  Esc=cancel";
         mvwaddstr(stdscr, sy + rows - 2, sx + 2, hint.c_str());
         wattroff(stdscr, COLOR_PAIR(CP_ATTR_OP));
 
@@ -1560,7 +1571,7 @@ bool App::editTextPopup(const std::string &title, std::string &content) {
         if (ch == 27) {  // Esc = cancel
             curs_set(0); timeout(100); touchwin(stdscr); return false;
         }
-        if (ch == KEY_F(2) || (ch == '\n' && false)) {  // F2 = save
+        if (ch == KEY_F(2) || ch == 24 || (ch == '\n' && false)) {  // F2 / Ctrl-X = save
             // Rebuild content from lines.
             std::string out;
             for (size_t i = 0; i < lines.size(); i++) {
@@ -1642,6 +1653,81 @@ std::string App::validatePpmConfig(const std::string &content) {
                 return "line " + std::to_string(lineno) + ": parameter '" + param + "' takes a single value";
         }
     }
+    return "";
+}
+
+namespace {
+// Helper: check a string is valid UTF-8 (rejects stray continuation/control bytes).
+bool validUtf8(const std::string &s) {
+    size_t i = 0;
+    while (i < s.size()) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c < 0x80) { i++; continue; }
+        int extra;
+        if ((c & 0xE0) == 0xC0) extra = 1;
+        else if ((c & 0xF0) == 0xE0) extra = 2;
+        else if ((c & 0xF8) == 0xF0) extra = 3;
+        else return false;
+        if (i + extra >= s.size()) return false;
+        for (int k = 1; k <= extra; k++) {
+            if ((static_cast<unsigned char>(s[i + k]) & 0xC0) != 0x80)
+                return false;
+        }
+        i += extra + 1;
+    }
+    return true;
+}
+
+// Helper: balanced delimiters (parens, braces, brackets, angle brackets).
+std::string checkBalanced(const std::string &s, const char *openSet, const char *closeSet,
+                          const char *label) {
+    int depth = 0;
+    for (char c : s) {
+        if (strchr(openSet, c)) depth++;
+        else if (strchr(closeSet, c)) {
+            depth--;
+            if (depth < 0)
+                return std::string("unbalanced '") + label + "': too many closing delimiters";
+        }
+    }
+    if (depth > 0)
+        return std::string("unbalanced '") + label + "': " + std::to_string(depth) + " unclosed";
+    return "";
+}
+} // namespace
+
+std::string App::detectAndValidateFormat(const std::string &content, const std::string &attrName) {
+    // ppm config: explicit attr name, or detected "param value" line shape.
+    if (attrName == "pwdCheckModuleArg")
+        return validatePpmConfig(content);
+
+    std::string trimmed = content;
+    size_t b = trimmed.find_first_not_of(" \t\r\n");
+    if (b != std::string::npos) trimmed = trimmed.substr(b);
+    if (trimmed.empty()) return "";  // empty content is always acceptable
+
+    // UTF-8 validity is a generic sanity check for any text payload.
+    if (!validUtf8(content))
+        return "ERR: content is not valid UTF-8";
+
+    // JSON detection: starts with { or [ (with surrounding whitespace only).
+    if (trimmed[0] == '{' || trimmed[0] == '[') {
+        std::string bErr = checkBalanced(content, "{[", "}]", "braces/brackets");
+        if (!bErr.empty()) return "ERR: JSON-ish content: " + bErr;
+        return "";  // structural balance OK; treat as valid
+    }
+    // XML detection: starts with '<'.
+    if (trimmed[0] == '<') {
+        std::string bErr = checkBalanced(content, "<", ">", "angle brackets");
+        if (!bErr.empty()) return "ERR: XML-ish content: " + bErr;
+        return "";
+    }
+
+    // Generic text: report unbalanced delimiters as a warning (not blocking),
+    // since plain text may legitimately contain unmatched quotes/delimiters.
+    std::string warn;
+    warn += checkBalanced(content, "([{", ")]}", "parentheses/braces/brackets");
+    if (!warn.empty()) return warn;
     return "";
 }
 
