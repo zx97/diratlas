@@ -15,10 +15,21 @@
 
 namespace diratlas {
 
-// LDAP Flavors
+// LDAP server families.
+//   StandardLDAP - servers that follow RFC 4510 strictly (OpenLDAP, 389 DS,
+//                  ApacheDS, OpenDJ, ...)
+//   NetscapeLDAP - the Netscape/iPlanet/Sun/Oracle/389-DS lineage, which
+//                  carries legacy operational attributes (entrydn, nsSuffix,
+//                  cn=monitor, ...)
+//   EDirectoryLDAP - NetIQ/Novell/OpenText eDirectory (NDS lineage)
+//   IBMLDAP      - IBM Security Verify Directory / Tivoli Directory Server
+//   MicrosoftAD  - Microsoft Active Directory (and AD-compatible servers)
 enum class LDAPFlavor {
     MicrosoftAD,
-    BasicLDAP
+    StandardLDAP,
+    NetscapeLDAP,
+    EDirectoryLDAP,
+    IBMLDAP
 };
 
 // userAccountControl flags

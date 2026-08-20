@@ -726,6 +726,19 @@ void App::drawStatusBar() {
     else if (conn_)
         s = conn_->defaultRootDN.empty() ? "LDAP" : conn_->defaultRootDN;
 
+    // Append detected server type (e.g. "OpenLDAP", "Active Directory", ...)
+    if (conn_) {
+        const char *type;
+        switch (conn_->flavor) {
+            case diratlas::LDAPFlavor::MicrosoftAD:   type = "Active Directory"; break;
+            case diratlas::LDAPFlavor::NetscapeLDAP:  type = "Netscape/389 DS";   break;
+            case diratlas::LDAPFlavor::EDirectoryLDAP:type = "eDirectory";        break;
+            case diratlas::LDAPFlavor::IBMLDAP:       type = "IBM Verify Dir";    break;
+            default:                                  type = "OpenLDAP";          break;
+        }
+        s += "  [" + std::string(type) + "]";
+    }
+
     // Append bind identity (DN or SASL mech)
     if (!bindIdentity_.empty()) {
         if (!s.empty()) s += "  |  ";
@@ -971,9 +984,7 @@ void App::handleKey(int ch) {
             if (tree_->selectionConfirmed()) {
                 tree_->clearConfirmed();
                 loadSelectedEntry();
-                // After opening an entry, move focus to the attribute panel so
-                // F2 (inline edit) works immediately.
-                focus_ = FOCUS_ATTRS;
+                // Keep focus on the tree; Tab switches to the attributes panel.
             }
         } else if (ch == KEY_RIGHT || ch == '+') {
             auto *node = tree_->currentNode();

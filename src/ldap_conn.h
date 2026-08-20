@@ -96,7 +96,7 @@ public:
     bool findRootDN(std::string &rootDN);
     /** @brief Fetch the list of namingContexts from the RootDSE. */
     std::vector<std::string> findNamingContexts();
-    /** @brief Detect backend flavour (MicrosoftAD vs BasicLDAP). */
+    /** @brief Detect backend flavour (MicrosoftAD vs StandardLDAP). */
     void guessFlavor();
 
     // ── Object CRUD ───────────────────────────────────────
@@ -176,6 +176,8 @@ public:
 
     /// Detected backend flavour
     LDAPFlavor flavor{LDAPFlavor::MicrosoftAD};
+    /// Detected server version string (e.g. "slapd 2.6.13"), may be empty
+    std::string serverVersion;
     /// Default root DN for searches
     std::string defaultRootDN;
     /// LDAP paging size

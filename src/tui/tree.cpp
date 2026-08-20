@@ -204,9 +204,13 @@ TreeNode *TreeWidget::loadChildren(TreeNode *node) {
     }
 
     // Normal LDAP search for children
-    std::vector<std::string> attrs = {"name", "cn", "ou", "dc", "uid",
-                                       "objectClass", "isDeleted",
-                                       "userAccountControl", "+"};
+    // AD-specific attributes (isDeleted, userAccountControl) are only
+    // requested on Microsoft AD servers; OpenLDAP has no such attributes.
+    std::vector<std::string> attrs = {"name", "cn", "ou", "dc", "uid", "objectClass", "+"};
+    if (conn_.flavor == LDAPFlavor::MicrosoftAD) {
+        attrs.push_back("isDeleted");
+        attrs.push_back("userAccountControl");
+    }
 
     std::vector<LDAPEntry> results;
     bool searchOk = conn_.search(node->dn, LDAP_SCOPE_ONELEVEL, "(objectClass=*)",

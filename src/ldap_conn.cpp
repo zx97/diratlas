@@ -675,21 +675,93 @@ std::vector<std::string> LDAPConn::findNamingContexts() {
 }
 
 /**
- * @brief Detect the LDAP server flavour by checking RootDSE objectClass.
+ * @brief Detect the LDAP server family from the RootDSE.
  *
- * If "OpenLDAProotDSE" is present, flavour is BasicLDAP;
- * otherwise defaults to MicrosoftAD.
+ * Detection order:
+ *   MicrosoftAD  - rootDomainNamingContext / forestFunctionality /
+ *                  domainFunctionality present, or vendorName is Microsoft.
+ *   EDirectoryLDAP - vendorName Novell/NetIQ/OpenText, or vendorVersion
+ *                  mentions "eDirectory", or NDSDsRootDSE objectClass.
+ *   IBMLDAP      - vendorName contains "IBM", or ibm-* rootDSE attributes.
+ *   NetscapeLDAP - vendorName is 389/Netscape/Sun/Oracle/Red Hat, or
+ *                  rootNamingContext present.
+ *   StandardLDAP - otherwise (OpenLDAProotDSE present, or default).
  */
 void LDAPConn::guessFlavor() {
-    auto entry = searchOne("", "(objectClass=*)", {"objectClass"}, false);
-    auto classes = entry.getAttrs("objectClass");
-    for (const auto &c : classes) {
-        if (c == "OpenLDAProotDSE") {
-            flavor = LDAPFlavor::BasicLDAP;
-            return;
-        }
+    auto entry = searchOne("", "(objectClass=*)",
+        {"objectClass", "vendorName", "vendorVersion", "rootDomainNamingContext",
+         "rootNamingContext", "forestFunctionality", "domainFunctionality",
+         "supportedControl", "ibm-enabledcapabilities", "ibm-serverId",
+         "ibmdirectoryversion"}, false);
+
+    // Microsoft AD
+    if (!entry.getAttr("rootDomainNamingContext").empty() ||
+        !entry.getAttr("forestFunctionality").empty() ||
+        !entry.getAttr("domainFunctionality").empty()) {
+        flavor = LDAPFlavor::MicrosoftAD;
+        return;
     }
-    flavor = LDAPFlavor::MicrosoftAD;
+
+    std::string vendor = entry.getAttr("vendorName");
+    std::string vl = vendor;
+    std::transform(vl.begin(), vl.end(), vl.begin(), ::tolower);
+    std::string ver = entry.getAttr("vendorVersion");
+    std::string verl = ver;
+    std::transform(verl.begin(), verl.end(), verl.begin(), ::tolower);
+
+    if (vl.find("microsoft") != std::string::npos) {
+        flavor = LDAPFlavor::MicrosoftAD;
+        return;
+    }
+
+    // eDirectory (Novell/NetIQ/OpenText) — vendor names and "eDirectory"
+    // in vendorVersion, or the NDS-specific rootDSE objectClass.
+    if (vl.find("novell") != std::string::npos ||
+        vl.find("netiq") != std::string::npos ||
+        vl.find("opentext") != std::string::npos ||
+        verl.find("edirectory") != std::string::npos) {
+        flavor = LDAPFlavor::EDirectoryLDAP;
+        return;
+    }
+    for (const auto &c : entry.getAttrs("objectClass"))
+        if (c == "NDSDsRootDSE") { flavor = LDAPFlavor::EDirectoryLDAP; return; }
+
+    // IBM Security Verify Directory / Tivoli — "IBM" vendor or ibm-* attrs.
+    if (vl.find("ibm") != std::string::npos ||
+        !entry.getAttr("ibm-enabledcapabilities").empty() ||
+        !entry.getAttr("ibm-serverId").empty() ||
+        !entry.getAttr("ibmdirectoryversion").empty()) {
+        flavor = LDAPFlavor::IBMLDAP;
+        return;
+    }
+
+    // Netscape lineage
+    if (vl.find("389") != std::string::npos ||
+        vl.find("netscape") != std::string::npos ||
+        vl.find("sun") != std::string::npos ||
+        vl.find("oracle") != std::string::npos ||
+        vl.find("red hat") != std::string::npos ||
+        !entry.getAttr("rootNamingContext").empty()) {
+        flavor = LDAPFlavor::NetscapeLDAP;
+        return;
+    }
+
+    // Basic LDAP fallback (unless already identified as another family above)
+    if (flavor == LDAPFlavor::MicrosoftAD)
+        flavor = LDAPFlavor::StandardLDAP;
+
+    // Capture a server version string when available: vendorVersion on the
+    // RootDSE, or OpenLDAP's cn=Monitor/monitoredInfo (e.g. "slapd 2.6.13").
+    if (!ver.empty())
+        serverVersion = ver;
+    else if (flavor == LDAPFlavor::StandardLDAP) {
+        auto mon = searchOne("cn=Monitor", "(objectClass=*)", {"monitoredInfo"}, false);
+        serverVersion = mon.getAttr("monitoredInfo");
+        // Strip a leading "OpenLDAP: " so the version reads cleanly.
+        const std::string prefix = "OpenLDAP: ";
+        if (serverVersion.compare(0, prefix.size(), prefix) == 0)
+            serverVersion = serverVersion.substr(prefix.size());
+    }
 }
 
 // ── Object CRUD ─────────────────────────────────────────

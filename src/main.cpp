@@ -227,7 +227,7 @@ struct Config {
     std::string timeFormat = "EU";
     /// Directory for exported data
     std::string exportDir = "data";
-    /// Backend flavor: "auto", "basic", "msad" (auto = RootDSE detection)
+    /// Backend flavor: "auto", "basic", "netscape", "edirectory", "ibm", "msad" (auto = RootDSE detection)
     std::string backendFlavor = "auto";
     /// Run in CLI mode (no TUI)
     bool cli = false;
@@ -1163,11 +1163,23 @@ int main(int argc, char **argv) {
         if (cfg.cli) return 0;
     }
 
-    // ── Detect backend flavour (auto / basic / msad) ──
+    // ── Detect backend flavour (auto / basic / netscape / edirectory / ibm / msad) ──
     if (cfg.backendFlavor == "auto") conn.guessFlavor();
-    else if (cfg.backendFlavor == "basic") conn.flavor = diratlas::LDAPFlavor::BasicLDAP;
+    else if (cfg.backendFlavor == "basic") conn.flavor = diratlas::LDAPFlavor::StandardLDAP;
+    else if (cfg.backendFlavor == "netscape") conn.flavor = diratlas::LDAPFlavor::NetscapeLDAP;
+    else if (cfg.backendFlavor == "edirectory") conn.flavor = diratlas::LDAPFlavor::EDirectoryLDAP;
+    else if (cfg.backendFlavor == "ibm") conn.flavor = diratlas::LDAPFlavor::IBMLDAP;
     else conn.flavor = diratlas::LDAPFlavor::MicrosoftAD;
-    diratlas::dbgLog(diratlas::LDAP_DEBUG_TRACE, "flavor: " + std::string(conn.flavor == diratlas::LDAPFlavor::MicrosoftAD ? "MicrosoftAD" : "BasicLDAP"));
+    const char *flavorName =
+        (conn.flavor == diratlas::LDAPFlavor::MicrosoftAD) ? "MicrosoftAD"
+        : (conn.flavor == diratlas::LDAPFlavor::NetscapeLDAP) ? "NetscapeLDAP"
+        : (conn.flavor == diratlas::LDAPFlavor::EDirectoryLDAP) ? "EDirectoryLDAP"
+        : (conn.flavor == diratlas::LDAPFlavor::IBMLDAP) ? "IBMLDAP"
+        : "StandardLDAP";
+    note(std::string("Server type: ") + flavorName
+        + (conn.serverVersion.empty() ? "" : " (" + conn.serverVersion + ")"));
+    diratlas::dbgLog(diratlas::LDAP_DEBUG_TRACE, "flavor: " + std::string(flavorName)
+        + (conn.serverVersion.empty() ? "" : " version=" + conn.serverVersion));
     // ── Auto-detect search base from RootDSE if not supplied ──
     if (!cfg.baseSet) {
         if (!conn.findRootDN(cfg.base)) {
