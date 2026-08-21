@@ -349,6 +349,23 @@ std::set<std::string> getAllowedAttrs(LDAPConn &conn,
     return result;
 }
 
+std::string objectClassKind(LDAPConn &conn, const std::string &className) {
+    if (className.empty()) return "";
+    auto rootDSE = conn.searchOne("", "(objectClass=*)", {"subschemaSubentry"}, false);
+    auto subschemaDN = rootDSE.getAttr("subschemaSubentry");
+    if (subschemaDN.empty()) return "";
+    auto subschema = conn.searchOne(subschemaDN, "(objectClass=*)", {"objectClasses"}, false);
+    auto allDefs = subschema.getAttrs("objectClasses");
+    for (const auto &def : allDefs) {
+        if (parseOCName(def) != className) continue;
+        if (def.find(" STRUCTURAL") != std::string::npos) return "STRUCTURAL";
+        if (def.find(" AUXILIARY") != std::string::npos) return "AUXILIARY";
+        if (def.find(" ABSTRACT") != std::string::npos) return "ABSTRACT";
+        return "";
+    }
+    return "";
+}
+
 /**
  * @brief Build hierarchy depth for each objectClass by walking SUP chains.
  *
@@ -433,11 +450,10 @@ OCSchemaInfo loadOCSchema(LDAPConn &conn) {
  *
  * @param entry      The LDAP entry whose attributes to show.
  * @param mandatory  Set of attribute names that are mandatory per schema.
- * @param ocDepths   Optional objectClass hierarchy depths (passed from loadOCSchema).
+ * @param ocInfo     Optional objectClass schema info (supMap/depths from loadOCSchema).
  */
 void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mandatory,
-                        const std::map<std::string, int> *ocDepths) {
-    (void)ocDepths;  // schema depths kept for future sorting; unused today
+                       const OCSchemaInfo *ocInfo) {
     entry_ = entry;
     rows_.clear();
     maxNameW_ = 0;
@@ -542,6 +558,43 @@ void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mand
         }
     }
 
+    // Show the full inherited SUP chain for each listed objectClass. Classes
+    // not present in the attribute are marked "(implicit from <parent>)";
+    // explicitly listed classes are shown without a marker.
+    if (ocInfo && !ocInfo->supMap.empty() &&
+        entry.attributes.count("objectClass") > 0) {
+        std::set<std::string> listed;
+        for (const auto &oc : entry.getAttrs("objectClass")) {
+            std::string l;
+            for (char c : oc) l += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            listed.insert(l);
+        }
+        std::set<std::string> shownImplicit;
+        for (const auto &oc : entry.getAttrs("objectClass")) {
+            std::string cur = oc;
+            std::string parent;
+            int guard = 0;
+            while (guard++ < 32) {
+                auto it = ocInfo->supMap.find(cur);
+                if (it == ocInfo->supMap.end()) break;
+                parent = it->second;
+                std::string pl;
+                for (char c : parent) pl += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                if (listed.count(pl)) break;   // parent is explicit; nothing implicit above it
+                if (shownImplicit.count(pl)) break;
+                shownImplicit.insert(pl);
+                AttrRow row;
+                row.name = "objectClass";
+                row.value = parent;
+                row.operational = true;
+                row.attrName = "objectClass";
+                row.display = parent + "  (implicit from " + cur + ")";
+                groups["objectclass"].vals.push_back(row);
+                cur = parent;
+            }
+        }
+    }
+
     // Sort: objectClass first, then mandatory, then regular, then operational; alphabetically within each group
     std::sort(attrOrder.begin(), attrOrder.end(),
         [&](const std::string &a, const std::string &b) {
@@ -610,6 +663,23 @@ void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mand
                         });
                 }
             }
+        }
+    }
+
+    // Sort objectClass values by hierarchy depth (most-derived first):
+    // inetOrgPerson (depth 3) → organizationalPerson (2) → person (1) → top (0).
+    // Implicit rows (value not directly in the entry) sort after their explicit
+    // parent; unknowns sort last.
+    {
+        auto &g = groups["objectclass"];
+        if (!g.vals.empty()) {
+            std::stable_sort(g.vals.begin(), g.vals.end(),
+                [&](const AttrRow &a, const AttrRow &b) {
+                    int da = (ocInfo && !ocInfo->supMap.empty()) ? ocInfo->depth(a.value) : 99;
+                    int db = (ocInfo && !ocInfo->supMap.empty()) ? ocInfo->depth(b.value) : 99;
+                    if (da != db) return da > db;   // deeper class first
+                    return a.display < b.display;
+                });
         }
     }
 

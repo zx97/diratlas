@@ -61,6 +61,11 @@ std::set<std::string> getInheritedMandatoryAttrs(LDAPConn &conn,
  */
 std::set<std::string> getAllowedAttrs(LDAPConn &conn,
                                       const std::vector<std::string> &objectClasses);
+/**
+ * @brief Return the objectClass kind of a class: "STRUCTURAL", "AUXILIARY",
+ *        "ABSTRACT", or "" when unknown.
+ */
+std::string objectClassKind(LDAPConn &conn, const std::string &className);
 
 /**
  * @brief ObjectClass hierarchy information from the subschema.
@@ -111,7 +116,7 @@ public:
 
     /** @brief Display an entry's attributes. */
     void show(const LDAPEntry &entry, const std::set<std::string> &mandatory = {},
-              const std::map<std::string, int> *ocDepths = nullptr);
+              const OCSchemaInfo *ocInfo = nullptr);
     /** @brief Reload and display the entry at the given DN. */
     void refresh(LDAPConn &conn, const std::string &dn);
     /** @brief Render the attributes panel. */

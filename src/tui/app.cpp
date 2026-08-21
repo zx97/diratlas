@@ -322,7 +322,7 @@ bool App::init(LDAPConn &conn, const std::string &initFilter,
                     auto objClasses = entry.getAttrs("objectClass");
                     auto mandatory = getMandatoryAttrs(*conn_, objClasses);
                     auto ocsi = loadOCSchema(*conn_);
-                    attrs_->show(entry, mandatory, &ocsi.depths);
+                    attrs_->show(entry, mandatory, &ocsi);
                 }
             }
         }
@@ -339,7 +339,7 @@ bool App::init(LDAPConn &conn, const std::string &initFilter,
         auto objClasses = entry.getAttrs("objectClass");
         auto mandatory = getMandatoryAttrs(*conn_, objClasses);
         auto ocsi = loadOCSchema(*conn_);
-        attrs_->show(entry, mandatory, &ocsi.depths);
+        attrs_->show(entry, mandatory, &ocsi);
     }
     log_ = dn.empty() ? "RootDSE" : dn;
 
@@ -475,11 +475,12 @@ int App::run() {
         // Apply pending UI update from worker thread
         if (pendingUpdate_.load()) {
             if (!pendingEntry_.attributeNames.empty())
-                attrs_->show(pendingEntry_, pendingMandatory_);
+                attrs_->show(pendingEntry_, pendingMandatory_, &pendingOcInfo_);
             if (!pendingLog_.empty()) log_ = pendingLog_;
             pendingUpdate_.store(false);
             pendingEntry_ = {};
             pendingMandatory_.clear();
+            pendingOcInfo_ = OCSchemaInfo{};
             pendingLog_.clear();
         }
 
@@ -1112,7 +1113,7 @@ void App::handleKey(int ch) {
                 auto objClasses = entry.getAttrs("objectClass");
                 auto mandatory = getMandatoryAttrs(*conn_, objClasses);
                 auto ocsi = loadOCSchema(*conn_);
-                attrs_->show(entry, mandatory, &ocsi.depths);
+                attrs_->show(entry, mandatory, &ocsi);
                 currentDN_ = targetDN;
                 log_ = targetDN;
             } else {
@@ -1177,6 +1178,7 @@ void App::loadSelectedEntry() {
                 if (!entry.attributeNames.empty()) {
                     auto objClasses = entry.getAttrs("objectClass");
                     pendingMandatory_ = getMandatoryAttrs(*conn_, objClasses);
+                    pendingOcInfo_ = loadOCSchema(*conn_);
                     pendingEntry_ = std::move(entry);
                     pendingLog_ = dn.empty() ? "RootDSE" : dn;
                 } else {
@@ -1976,6 +1978,32 @@ void App::appDeleteAttr() {
     if (attrs_ && attrs_->selectedRow() >= 0 && attrs_->selectedRow() < attrs_->rowCount())
         val = attrs_->getValue(attrs_->selectedRow());
     std::vector<std::string> allVals = attrs_ ? attrs_->getAttrValues(attrName) : std::vector<std::string>{};
+
+    // Removing an objectClass value: refuse to drop the last STRUCTURAL class,
+    // otherwise the server rejects with "no structural object class provided".
+    {
+        std::string attrLower;
+        for (char c : attrName)
+            attrLower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (attrLower == "objectclass" && !val.empty()) {
+        LDAPEntry cur = conn_->searchOne(dn, "(objectClass=*)", {"*"}, false);
+        std::vector<std::string> ocs = cur.getAttrs("objectClass");
+        // Count how many of the remaining classes (after removing val) are STRUCTURAL.
+        std::string target = val;
+        int structuralRemaining = 0;
+        for (const auto &oc : ocs) {
+            if (oc == target) continue;
+            if (objectClassKind(*conn_, oc) == "STRUCTURAL")
+                structuralRemaining++;
+        }
+        if (structuralRemaining == 0) {
+            setLog("Delete rejected: '" + val + "' is the last STRUCTURAL objectClass; "
+                   "the entry would have no structural class");
+            return;
+        }
+        }
+    }
+
     if (!val.empty() && allVals.size() > 1) {
         pendingConfirm_ = "delval:" + dn + "|" + attrName + "|" + val;
         setLog("Delete value of " + attrName + "?  [Y]es / [N]o");
@@ -2159,7 +2187,7 @@ void App::applyPendingConfirm(char ans) {
         std::string dn = rest.substr(0, bar);
         std::string attr = rest.substr(bar + 1);
         runWriteOp([this, dn, attr]() { return conn_->deleteAttribute(dn, attr); },
-                    "Deleted " + attr + " from " + dn, "Delete attr failed");
+                    "Deleted " + attr + " from " + dn, "Delete attr failed", false, true);
     } else if (kind == "delval") {
         auto bar1 = rest.find('|');
         if (bar1 == std::string::npos) return;
@@ -2169,7 +2197,7 @@ void App::applyPendingConfirm(char ans) {
         std::string attr = rest.substr(bar1 + 1, bar2 - bar1 - 1);
         std::string val = rest.substr(bar2 + 1);
         runWriteOp([this, dn, attr, val]() { return conn_->deleteAttributeValue(dn, attr, val); },
-                    "Deleted value of " + attr + " from " + dn, "Delete value failed");
+                    "Deleted value of " + attr + " from " + dn, "Delete value failed", false, true);
     } else if (kind == "rename") {
         auto bar = rest.find('|');
         if (bar == std::string::npos) return;
