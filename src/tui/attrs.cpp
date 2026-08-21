@@ -666,8 +666,8 @@ void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mand
         }
     }
 
-    // Sort objectClass values by hierarchy depth (most-derived first):
-    // inetOrgPerson (depth 3) → organizationalPerson (2) → person (1) → top (0).
+    // Sort objectClass values by hierarchy depth, root first (top-down):
+    // top (0) → person (1) → organizationalPerson (2) → inetOrgPerson (3).
     // Implicit rows (value not directly in the entry) sort after their explicit
     // parent; unknowns sort last.
     {
@@ -677,7 +677,7 @@ void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mand
                 [&](const AttrRow &a, const AttrRow &b) {
                     int da = (ocInfo && !ocInfo->supMap.empty()) ? ocInfo->depth(a.value) : 99;
                     int db = (ocInfo && !ocInfo->supMap.empty()) ? ocInfo->depth(b.value) : 99;
-                    if (da != db) return da > db;   // deeper class first
+                    if (da != db) return da < db;   // shallower class (root) first
                     return a.display < b.display;
                 });
         }
