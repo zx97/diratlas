@@ -1045,6 +1045,14 @@ int main(int argc, char **argv) {
 
     // ── StartTLS negotiation (try or require) ──
     if (cfg.starttls > 0) {
+        // ldaps:// already establishes TLS during the TCP handshake; adding
+        // -Z (StartTLS) on top is contradictory and makes ldap_start_tls_s
+        // fail. Point this out before the connection is silently un-TLS'd.
+        if (cfg.ldapUri.rfind("ldaps://", 0) == 0) {
+            std::cerr << "Warning: -Z (StartTLS) is incompatible with an "
+                         "ldaps:// URI (TLS is already on). Use ldap:// + -Z "
+                         "for StartTLS, or ldaps:// without -Z.\n";
+        }
         diratlas::dbgLog(diratlas::LDAP_DEBUG_TRACE, "starttls: negotiating (" + std::string(cfg.starttls == 2 ? "required" : "try") + ")");
         bool ok = conn.startTLS();
         if (!ok && cfg.starttls == 2) {
