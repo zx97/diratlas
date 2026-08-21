@@ -78,7 +78,7 @@ private:
     void appExportLdif();
     void appDeleteEntry();
     void appAddEntry();
-    void appAddAttr();
+    void appAddAttr(const std::string &presetName = "");
     void appDeleteAttr();
     void appMoveEntry();
     void appDuplicateEntry(const std::string &sourceDN = "");
