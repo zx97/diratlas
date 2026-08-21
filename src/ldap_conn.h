@@ -110,6 +110,15 @@ public:
     /** @brief Atomically replace one value of an attribute (DELETE old + ADD new). */
     bool replaceAttributeValue(const std::string &dn, const std::string &attr,
                                const std::string &oldValue, const std::string &newValue);
+    /**
+     * @brief RFC 4511 §4.10 Compare: check whether an attribute value matches.
+     * @param dn    The entry DN.
+     * @param attr  AttributeDescription (type, and optionally ;options).
+     * @param value The assertion value to compare against.
+     * @return 1 if the attribute value matches, 0 if it does not,
+     *         -1 on protocol error (see getLastError()).
+     */
+    int compare(const std::string &dn, const std::string &attr, const std::string &value);
 
     // ── Object Naming (moddn) ─────────────────────────────
     /**
