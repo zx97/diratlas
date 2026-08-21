@@ -40,26 +40,24 @@ Règles :
 ### Support actuel dans DirAtlas
 | Aspect | Statut | Détails |
 |--------|--------|---------|
-| Affichage d'un attribut avec option (`cn;lang-en`) | ⚠️ Partiel | Le nom est affiché tel quel ; `lowerName` le minuscule mais ne découpe pas `;option` ; le formatage AD/ldapcore reçoit le nom complet avec `;...` → la correspondance de formatage échoue souvent |
-| Écriture d'un attribut avec option | ⚠️ Non géré | `modifyAttribute`/`addAttribute` envoient le nom tel quel ; le serveur l'accepte mais DirAtlas ne sépare pas type/option |
-| Édition des options | ❌ Aucune | Pas d'UI pour ajouter/retirer/modifier `;binary`, `;lang-*` |
-| Option `binary` (décodage/encodage BER) | ❌ Aucune | `binaryAttributes` existe mais le déclenchement n'est pas basé sur l'option `;binary` |
-| Options `lang-*` | ❌ Aucune | Pas de gestion des sélecteurs de langue |
-| Tri / regroupement par attribut de base | ❌ Non | `cn;lang-en` et `cn;lang-fr` sont vus comme des attributs distincts, pas groupés sous `cn` |
-| Recherche/filtre avec options | ❌ Non | Les filtres sont passés tels quels |
+| Parseur d'AttributeDescription | ✅ Fait | `ldapcore/attrdesc` : `type;opt1;opt2`, insensible à la casse, détecte `binary`, OID (commit `0181068`) |
+| Affichage d'un attribut avec option (`cn;lang-en`) | ✅ Fait | Le type de base est utilisé pour le formatage/les couleurs ; les options restent affichées dans le nom |
+| Écriture d'un attribut avec option | ✅ Fait | `addAttribute`/`modifyAttribute` envoient le nom complet (type+options) ; `appAttrOptions` permet de renommer type/options |
+| Édition des options | ✅ Fait | Menu F2 → « Modify attribute options » (RFC 4512 §2.5.2) |
+| Regroupement par attribut de base | ✅ Fait | Les variantes (`cn;lang-en`, `cn;lang-fr`) sont groupées sous le type de base `cn` |
+| Vérification schéma à l'ajout d'attribut | ✅ Fait | `appAddAttr` refuse un attribut non autorisé par les objectClass de l'entrée ; pour `objectClass`, vérifie que la classe existe et signale les MUST manquants |
+| Option `binary` (décodage/encodage BER) | ⚠️ Partiel | L'option `;binary` est reconnue par le parseur ; le déclenchement du chemin binaire via l'option reste à brancher |
+| Options `lang-*` | ⚠️ Partiel | Parsées et regroupées ; aucune logique de langue côté client |
+| Recherche/filtre avec options | ⚠️ Non | Les filtres sont passés tels quels (aucun préfixage d'option) |
 
-### Priorisation des travaux §2.5.2
-1. **P0 — Parseur d'AttributeDescription** : découper `attributetype;option1;option2`
-   en `(type, [options])`, insensible à la casse. Base de tout le reste.
-2. **P0 — Affichage correct** : utiliser le type de base pour le formatage/les couleurs,
-   afficher les options distinctement (ex. `cn;lang-en` surligné différemment).
-3. **P1 — Édition des options** : dans le menu dynamique de l'attribut, proposer
-   « Modifier les options » (ajouter/retirer `;binary`, `;lang-*`).
-4. **P1 — Regroupement** : grouper les variantes (`cn;lang-en`, `cn;lang-fr`) sous le
-   type de base `cn`, avec expansion/collapse.
-5. **P2 — Option `binary`** : traiter `;binary` comme déclencheur du chemin binaire
+### Priorisation des travaux §2.5.2 (mis à jour)
+1. ✅ **Fait — Parseur d'AttributeDescription** : `ldapcore/attrdesc`.
+2. ✅ **Fait — Affichage correct** : type de base pour le formatage ; options affichées.
+3. ✅ **Fait — Édition des options** : menu F2 → « Modify attribute options ».
+4. ✅ **Fait — Regroupement** : variantes groupées sous le type de base.
+5. ⏳ **P2 — Option `binary`** : brancher `;binary` comme déclencheur du chemin binaire
    (`binaryAttributes` + formatage HEX/octet-stream) indépendamment du flavour.
-6. **P2 — Écriture avec option** : séparer proprement type/option lors des écritures.
+6. ⏳ **P2 — Écriture avec option** : confirmation/validation des options avant écriture.
 
 ---
 
@@ -86,59 +84,54 @@ Règles :
 ### NON implémentées (RFC 4511 et extensions)
 | # | Opération | RFC | Utilité | Priorité |
 |---|-----------|-----|---------|----------|
-| 1 | **Compare** | 4511 §4.10 | Vérifier si une valeur d'attribut correspond ; utile pour « tester la présence » d'une option/valeur | **P0** |
-| 2 | **Abandon** (public) | 4511 §4.11 | `cancelOperation` existe mais `abandon` d'un search en cours n'est pas exposé proprement | P1 |
-| 3 | **Persistent Search** (RFC 4533) | 4533 | Notification de changements en temps réel | P2 |
-| 4 | **Synchronization** | 4533 | Sync répliquée | P3 |
-| 5 | **Refresh / Chaining** | — | Refresh de cache ; dépend des overlays | P3 |
-| 6 | **Modify-Increment** | 4525 | `modify` avec `increment` (compteurs) | P2 |
-| 7 | **Assertion control** | 4528 | Contrôle d'assertion | P2 |
-| 8 | **Pre/Post-Read control** | 4527 | Lire valeurs avant/après modif | P2 |
-| 9 | **Subentries** (RFC 3672) | 3672 | Gestion d'`entryDN`/sous-entrées opérationnelles | P3 |
-| 10 | **RootDSE opérations spécifiques** | 4512 | Lecture plus fine des capabilities (`supportedCapabilities`, `supportedFeatures`) | P2 |
+| 1 | **Abandon** (public) | 4511 §4.11 | `cancelOperation` existe mais `abandon` d'un search en cours n'est pas exposé proprement | P1 |
+| 2 | **Persistent Search** (RFC 4533) | 4533 | Notification de changements en temps réel | P2 |
+| 3 | **Synchronization** | 4533 | Sync répliquée | P3 |
+| 4 | **Refresh / Chaining** | — | Refresh de cache ; dépend des overlays | P3 |
+| 5 | **Modify-Increment** | 4525 | `modify` avec `increment` (compteurs) | P2 |
+| 6 | **Assertion control** | 4528 | Contrôle d'assertion | P2 |
+| 7 | **Pre/Post-Read control** | 4527 | Lire valeurs avant/après modif | P2 |
+| 8 | **Subentries** (RFC 3672) | 3672 | Gestion d'`entryDN`/sous-entrées opérationnelles | P3 |
+| 9 | **RootDSE opérations spécifiques** | 4512 | Lecture plus fine des capabilities (`supportedCapabilities`, `supportedFeatures`) | P2 |
 
-### Priorisation recommandée (à revoir ensemble)
-- **P0** : `Compare` (simple, très utile pour valider/authentifier, et nécessaire pour
-  le menu dynamique « tester une valeur »), plus le **parseur d'`attributeTypes`**
-  (requis pour la duplication autorisée par schéma et pour §2.5.2).
-- **P1** : `Abandon` propre, édition des options, regroupement des variantes.
+### Priorisation recommandée (mis à jour)
+- ✅ **Fait — Compare** (RFC 4511 §4.10) : `LDAPConn::compare()`.
+- ✅ **Fait — Parseur d'`attributeTypes`** : `AttrSchemaInfo` + `loadAttrSchema`.
+- ✅ **Fait — Menu dynamique F2** : contextuel selon le schéma.
+- ✅ **Fait — Vérification schéma à l'ajout d'attribut** : `getAllowedAttrs` (MUST∪MAY hérités).
+- **P1** : `Abandon` propre.
 - **P2** : `binary` handling, `Modify-Increment`, assertion/pre-post-read, persistent search.
 - **P3** : sync, subentries, refresh/chaining.
 
 ---
 
-## 4. Menu dynamique Attributs — spécification proposée
+## 4. Menu dynamique Attributs — implémenté
 
 ### Déclencheur
-`F2` (et éventuellement clic droit) dans le panneau Attributs, sur la ligne sous le curseur.
+`F2` (et `appPickList`) dans le panneau Attributs, sur la ligne sous le curseur.
 
-### Actions candidates (affichées selon le schéma)
-| Action | Condition d'affichage (schéma) |
-|--------|--------------------------------|
-| Éditer la valeur | Toujours |
-| Modifier les options (RFC 4512 §2.5.2) | Toujours (si le type de base est connu) |
-| Ajouter une valeur | Si l'attribut est **multi-valué** (`EQUALITY` non-SINGLE) ou inconnu |
-| Dupliquer la valeur | Si multi-valué (schéma l'autorise) |
-| Supprimer la valeur | Si multi-valué (et pas RDN unique) |
-| Supprimer l'attribut | Toujours (sauf attributs obligatoires / opérationnels protégés) |
+### Actions candidates (affichées selon le schéma) — implémentées
+| Action | Condition d'affichage (schéma) | Statut |
+|--------|--------------------------------|--------|
+| Éditer la valeur | Toujours | ✅ |
+| Modifier les options (RFC 4512 §2.5.2) | Si l'attribut a des options | ✅ |
+| Ajouter une valeur | Si l'attribut est **multi-valué** et non `NO-USER-MODIFICATION` | ✅ |
+| Dupliquer la valeur | Si multi-valué + une valeur sélectionnée | ✅ |
+| Supprimer la valeur | Si multi-valué + une valeur sélectionnée | ✅ |
+| Supprimer l'attribut | Toujours (sauf protégé) | ✅ |
 
-### Données nécessaires (à implémenter)
-1. **Parseur d'`attributeTypes`** du subschema → par attribut : `SINGLE-VALUE` ?,
-   `EQUALITY`/`ORDERING`/`SUBSTR` (pour l'unicité), `SYNTAX`, `NO-USER-MODIFICATION`.
-2. **Parseur d'`AttributeDescription`** (RFC 4512 §2.5.2) → `(type, options)`.
-3. Chemin de lecture : `subschemaSubentry` (RootDSE) → `attributeTypes` (subschema).
-
-### Vérification avant duplication
-- L'attribut cible est-il défini dans le subschema ?
-  - non → proposer uniquement Édition (schéma inconnu → prudence) + message ;
-  - oui et `SINGLE-VALUE` → pas de duplication/ajout de valeur ;
-  - oui et multi-valué → proposer Ajouter/Dupliquer/Supprimer valeur.
+### Vérification avant ajout d'attribut (implémentée dans `appAddAttr`)
+- **Attribut ≠ objectClass** : doit être dans l'union MUST∪MAY (héritée via SUP) des
+  objectClass de l'entrée, sinon refus avec explication (`getAllowedAttrs`).
+- **objectClass** : la classe doit exister dans le schéma (sinon refus) ; les MUST de la
+  nouvelle classe absents de l'entrée sont signalés.
 
 ---
 
 ## 5. Fichiers impactés (ordre de travail)
-1. `src/ldapcore/attrs.h/.cpp` (ou nouveau `src/ldapcore/attrdesc.h/.cpp`) :
-   parseur d'AttributeDescription (type + options).
-2. `src/tui/attrs.cpp` : parseur d'`attributeTypes` + fonction « est multi-valué / autorise X ».
-3. `src/tui/app.cpp` : menu dynamique F2 (remplace l'édition inline directe).
-4. `src/ldap_conn.cpp` : `compare()` (P0) si retenu.
+1. `src/ldapcore/attrdesc.h/.cpp` : parseur d'AttributeDescription (type + options). ✅
+2. `src/tui/attrs.cpp` : parseur d'`attributeTypes` (`AttrSchemaInfo`/`loadAttrSchema`),
+   `parseMAY`, `getAllowedAttrs` (MUST∪MAY hérités). ✅
+3. `src/tui/app.cpp` : menu dynamique F2, `appAttrMenu`, `appAttrDuplicateValue`,
+   `appAttrOptions`, vérification schéma dans `appAddAttr`. ✅
+4. `src/ldap_conn.cpp/.h` : `compare()` (RFC 4511 §4.10). ✅

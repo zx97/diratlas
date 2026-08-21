@@ -210,9 +210,59 @@ Key editing actions (all in the **Edit** menu, `F1..F8` open the menu bar):
 | Duplicate entry | `Edit ▸ Duplicate entry` (or `p` / `P`) | copies the current entry (objectClass + values, operational attrs dropped) under a new RDN / parent |
 | Rename / Move | `Edit ▸ Rename / Move entry` | edit the RDN and/or parent DN — a real `moddn` (`ldap_rename_s`), not an attribute replace |
 | Delete entry | `Edit ▸ Delete entry` | confirm prompt |
-| Add attribute | `Edit ▸ Add attribute` | name + value prompt |
+| Add attribute | `Edit ▸ Add attribute` | name + value prompt; **schema-checked** (see below) |
 | Delete attribute | `Edit ▸ Delete attribute` | confirm prompt; per-value prompt for multi-valued |
-| Inline edit | `F2` on the attributes panel | editing an RDN attribute (`cn`, `ou`, `uid`, `dc`) issues a `moddn`; `Enter` confirms, `Esc` cancels |
+| Attribute context menu | `F2` on the attributes panel | **dynamic** menu with schema-aware actions (see below) |
+
+### Attribute context menu (F2)
+
+Pressing `F2` on an attribute row opens a **dynamic** menu whose items are
+filtered by the server schema (`attributeTypes` from the subschema):
+
+```
+        F2 (attrs panel)
+              │
+              ▼
+        appAttrMenu()
+              │
+              ├─ Edit value                        (always)
+              ├─ Modify attribute options          (if the type has ;options, RFC 4512 §2.5.2)
+              ├─ Add value                         (if multi-valued & not NO-USER-MODIFICATION)
+              ├─ Duplicate value                   (if multi-valued & a value is selected)
+              ├─ Delete value                      (if multi-valued & a value is selected)
+              └─ Delete attribute                  (unless NO-USER-MODIFICATION)
+```
+
+Actions that the schema does not allow are simply not offered, so a
+`SINGLE-VALUE` attribute never shows Add/Duplicate/Delete-value.
+
+### Schema-aware attribute insertion
+
+When adding an attribute (`appAddAttr`), DirAtlas validates it against the
+entry's objectClasses before writing:
+
+```
+appAddAttr(attr, value)
+   │
+   ├─ attr == objectClass ?
+   │     ├─ class defined in subschema ?  ─ no ─► reject ("not defined in schema")
+   │     └─ yes ─► note the new class's inherited MUST not yet present
+   │
+   └─ other attribute
+         └─ in getAllowedAttrs(objectClasses) ?  (MUST ∪ MAY, via SUP chain)
+               ─ no ─► reject ("not allowed by objectClass (...)")
+
+getAllowedAttrs = ⋃ for each objectClass: MUST ∪ MAY (walking SUP ancestors)
+```
+
+### Attribute options (RFC 4512 §2.5.2)
+
+`cn;lang-en`, `jpegPhoto;binary` and similar **AttributeDescriptions** are
+parsed by `ldapcore::attrdesc` (type + options, case-insensitive). Variants
+sharing the same base type are **grouped** under it in the panel, and the base
+type drives schema/formatting decisions while the full description (with
+options) is used for reads and writes. `F2 ▸ Modify attribute options` lets you
+rename the type or edit the option list.
 
 ### Attribute formatting pipeline
 
@@ -260,6 +310,7 @@ src/
 ├── embedded.hpp      embedded LICENSE text + `doc` documentation
 ├── ldapcore/         generic LDAP formatting — no AD knowledge
 │   ├── attrs.h/.cpp  GeneralizedTime, timestamps, durations, HEX fallback
+│   ├── attrdesc.h/.cpp  AttributeDescription parser (RFC 4512 §2.5.2: type + ;options)
 │   ├── bytes.h/.cpp  hex, base64, LE32, printability, safe int parsing,
 │   │                 LDIF safe-string check
 │   └── dn.h/.cpp     pure DN helpers (rdnOf, parentOf, braceIdx,
@@ -274,7 +325,8 @@ src/
 │   ├── app.h/.cpp    App: windows, event loop, worker thread, menus, splitter
 │   ├── tree.h/.cpp   TreeWidget/TreeNode: hierarchy browser, search results
 │   └── attrs.h/.cpp  AttrsWidget: attribute panel, schema lookup, inline edit
-└── tests/            unit tests (ctest): test_dn.cpp → `test_dn`
+└── tests/            unit tests (ctest): test_dn.cpp → `test_dn`,
+                     test_attrdesc.cpp → `test_attrdesc`
 ```
 
 ### Tests
