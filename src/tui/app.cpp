@@ -626,9 +626,10 @@ void App::draw() {
         wnoutrefresh(stdscr);
     }
 
-    // Warn when a background operation runs longer than 1s.
+    // Show a "working" popup while a background operation runs (threshold
+    // avoids a flicker on sub-200ms ops but still gives immediate feedback).
     if (loading_.load() &&
-        std::chrono::steady_clock::now() - loadingStart_ > std::chrono::seconds(1)) {
+        std::chrono::steady_clock::now() - loadingStart_ > std::chrono::milliseconds(200)) {
         int pw = 46, ph = 5;
         int py = (LINES - ph) / 2, px = (COLS - pw) / 2;
         if (py < 0) py = 0;
@@ -1416,10 +1417,10 @@ void App::showValuePopup(const std::string &title, const std::string &content,
             mvwaddstr(stdscr, hintY, sx + 2, hints.c_str());
             wattroff(stdscr, COLOR_PAIR(CP_ATTR_OP));
 
-            wnoutrefresh(stdscr);
-            doupdate();
+        wnoutrefresh(stdscr);
+        doupdate();
 
-            int ch = getch();
+        int ch = getch();
             if (ch == 27 || ch == 'q' || ch == 'Q') goto done;
             if (ch == KEY_UP && scroll > 0) scroll--;
             if (ch == KEY_DOWN && scroll + contentH < static_cast<int>(lines.size())) scroll++;
@@ -1831,6 +1832,17 @@ int App::appPopupForm(const std::string &title,
         wnoutrefresh(stdscr);
         doupdate();
 
+        // Place the real ncurses cursor on the active field so typing appears
+        // in the right place (curs_set(1) is active).
+        if (focus >= 0 && focus < static_cast<int>(fields.size())) {
+            int caret = curPos[focus] - scrollOff[focus];
+            if (caret < 0) caret = 0;
+            if (caret > valW - 1) caret = valW - 1;
+            wmove(stdscr, sy + 2 + focus, valX + caret);
+        } else {
+            wmove(stdscr, sy + 2 + static_cast<int>(fields.size()), sx + 2);
+        }
+
         int ch = getch();
         if (ch == 27) { done = true; return 0; }
         if (ch == '\t') {
@@ -2029,7 +2041,7 @@ void App::appAttrMenu() {
         appAttrOptions();
         break;
     case 'a':
-        appAddAttr();  // reuses the add-attribute form (prefilled name)
+        appAddAttr(attrFull);
         break;
     case 'd':
         appAttrDuplicateValue();
@@ -2265,10 +2277,10 @@ void App::appDuplicateEntry(const std::string &sourceDN) {
                "Duplicated: " + srcDN + " → " + newDN, "Duplicate failed", true);
 }
 
-void App::appAddAttr() {
+void App::appAddAttr(const std::string &presetName) {
     std::string dn = tree_ ? tree_->selectedDN() : "";
     if (dn.empty()) { setLog("Add attr: select an entry first"); return; }
-    std::string attrName;
+    std::string attrName = presetName;
     std::string attrValue;
     std::vector<std::pair<std::string, std::string*>> fields = {
         {"Attribute:", &attrName}, {"Value:", &attrValue},
