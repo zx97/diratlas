@@ -54,7 +54,13 @@ std::vector<std::string> listObjectClasses(LDAPConn &conn);
  *        so inherited requirements (e.g. person → inetOrgPerson) are included.
  */
 std::set<std::string> getInheritedMandatoryAttrs(LDAPConn &conn,
-                                                  const std::string &objectClass);
+                                                   const std::string &objectClass);
+/**
+ * @brief Collect all attributes allowed (MUST ∪ MAY) for the given objectClasses,
+ *        walking each class's SUP chain so inherited members are included.
+ */
+std::set<std::string> getAllowedAttrs(LDAPConn &conn,
+                                      const std::vector<std::string> &objectClasses);
 
 /**
  * @brief ObjectClass hierarchy information from the subschema.

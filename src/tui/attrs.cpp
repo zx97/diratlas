@@ -169,6 +169,31 @@ static void parseMUST(const std::string &ocDef, std::set<std::string> &out) {
     if (!attr.empty()) out.insert(attr);
 }
 
+/// @brief Extract $ -separated attribute names from a " MAY (...)" list (RFC 4512).
+static void parseMAY(const std::string &ocDef, std::set<std::string> &out) {
+    auto mpos = ocDef.find(" MAY ");
+    if (mpos == std::string::npos) return;
+    mpos += 5;
+    if (mpos >= ocDef.size()) return;
+    size_t start = mpos;
+    if (ocDef[start] == '(') start++;
+    size_t end = ocDef.find(')', start);
+    if (end == std::string::npos) return;
+    std::string list = ocDef.substr(start, end - start);
+    size_t p = 0, q;
+    while ((q = list.find('$', p)) != std::string::npos) {
+        std::string attr = list.substr(p, q - p);
+        attr.erase(0, attr.find_first_not_of(" \t\r\n"));
+        attr.erase(attr.find_last_not_of(" \t\r\n") + 1);
+        if (!attr.empty()) out.insert(attr);
+        p = q + 1;
+    }
+    std::string attr = list.substr(p);
+    attr.erase(0, attr.find_first_not_of(" \t\r\n"));
+    attr.erase(attr.find_last_not_of(" \t\r\n") + 1);
+    if (!attr.empty()) out.insert(attr);
+}
+
 /**
  * @brief Determine mandatory attributes for a set of objectClasses by querying the subschema.
  *
@@ -291,6 +316,35 @@ std::set<std::string> getInheritedMandatoryAttrs(LDAPConn &conn,
             break;
         }
         if (!found) break;
+    }
+    return result;
+}
+
+std::set<std::string> getAllowedAttrs(LDAPConn &conn,
+                                      const std::vector<std::string> &objectClasses) {
+    std::set<std::string> result;
+    if (objectClasses.empty()) return result;
+    auto rootDSE = conn.searchOne("", "(objectClass=*)", {"subschemaSubentry"}, false);
+    auto subschemaDN = rootDSE.getAttr("subschemaSubentry");
+    if (subschemaDN.empty()) return result;
+    auto subschema = conn.searchOne(subschemaDN, "(objectClass=*)", {"objectClasses"}, false);
+    auto allDefs = subschema.getAttrs("objectClasses");
+
+    for (const auto &oc : objectClasses) {
+        std::string cur = oc;
+        std::set<std::string> visited;
+        while (!cur.empty() && visited.insert(cur).second) {
+            bool found = false;
+            for (const auto &def : allDefs) {
+                if (parseOCName(def) != cur) continue;
+                parseMUST(def, result);
+                parseMAY(def, result);
+                cur = parseSUP(def);
+                found = true;
+                break;
+            }
+            if (!found) break;
+        }
     }
     return result;
 }
@@ -477,12 +531,15 @@ void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mand
             if (showText != row.value)
                 row.display = showText;
 
-            groups[attrName].vals.push_back(row);
-            groups[attrName].op = op;
-            groups[attrName].mand = mand;
+            groups[baseType].vals.push_back(row);
+            groups[baseType].op = op;
+            groups[baseType].mand = mand;
         }
-        if (!it->second.empty())
-            attrOrder.push_back(attrName);
+        if (!it->second.empty()) {
+            bool seen = (std::find(attrOrder.begin(), attrOrder.end(), baseType) != attrOrder.end());
+            if (!seen)
+                attrOrder.push_back(baseType);
+        }
     }
 
     // Sort: objectClass first, then mandatory, then regular, then operational; alphabetically within each group
@@ -567,7 +624,7 @@ void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mand
             // Only first 3 values + "[+N more]" toggle
             for (int i = 0; i < 3; i++) {
                 rows_.push_back(g.vals[i]);
-                maxNameW_ = std::max(maxNameW_, static_cast<int>(attrName.size()));
+                maxNameW_ = std::max(maxNameW_, static_cast<int>(g.vals[i].name.size()));
             }
             AttrRow toggle;
             toggle.isToggle = true;
@@ -581,7 +638,7 @@ void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mand
         } else {
             for (int i = 0; i < n; i++) {
                 rows_.push_back(g.vals[i]);
-                maxNameW_ = std::max(maxNameW_, static_cast<int>(attrName.size()));
+                maxNameW_ = std::max(maxNameW_, static_cast<int>(g.vals[i].name.size()));
             }
         }
     }

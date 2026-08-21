@@ -2275,6 +2275,69 @@ void App::appAddAttr() {
     };
     if (appPopupForm("Add Attribute", fields, nullptr) == 0) { setLog("Add attr cancelled"); return; }
     if (attrName.empty()) { setLog("Attribute name required"); return; }
+
+    // Lower-case base type (ignore any ;options for the schema lookup).
+    diratlas::ldapcore::AttributeDescription ad;
+    std::string baseType = attrName;
+    if (diratlas::ldapcore::parseAttributeDescription(attrName, ad))
+        baseType = ad.type;
+    std::string lower;
+    for (char c : baseType)
+        lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    // Load the entry's objectClasses and the attributes they allow.
+    LDAPEntry cur = conn_->searchOne(dn, "(objectClass=*)", {"*"}, false);
+    if (cur.attributeNames.empty()) { setLog("Add attr failed: cannot read " + dn); return; }
+    std::vector<std::string> ocs = cur.getAttrs("objectClass");
+
+    if (lower == "objectclass") {
+        auto allClasses = listObjectClasses(*conn_);
+        std::string cls = attrValue;
+        std::string clsLower;
+        for (char c : cls) clsLower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        bool known = false;
+        for (const auto &c : allClasses) {
+            std::string cl;
+            for (char x : c) cl += static_cast<char>(std::tolower(static_cast<unsigned char>(x)));
+            if (cl == clsLower) { known = true; break; }
+        }
+        if (!known) {
+            setLog("Add objectClass rejected: '" + cls + "' is not defined in the server schema");
+            return;
+        }
+        // Note the MUST attributes the new class requires.
+        std::string missing;
+        auto need = getInheritedMandatoryAttrs(*conn_, cls);
+        std::set<std::string> have;
+        for (const auto &an : cur.attributeNames)
+            have.insert(an);
+        for (const auto &m : need) {
+            if (m == "top") continue;
+            if (!have.count(m)) {
+                if (!missing.empty()) missing += ", ";
+                missing += m;
+            }
+        }
+        if (!missing.empty())
+            setLog("Adding objectClass '" + cls + "' will require missing attribute(s): " + missing);
+        runWriteOp([this, dn, attrName, attrValue]() {
+                       return conn_->addAttribute(dn, attrName, {attrValue});
+                   },
+                   "Added " + attrName + " to " + dn, "Add attr failed", false, true);
+        return;
+    }
+
+    auto allowed = getAllowedAttrs(*conn_, ocs);
+    if (!allowed.empty() && !allowed.count(lower)) {
+        std::string ocList;
+        for (size_t i = 0; i < ocs.size(); i++) {
+            if (i) ocList += ", ";
+            ocList += ocs[i];
+        }
+        setLog("Add rejected: '" + attrName + "' is not allowed by objectClass (" + ocList + ")");
+        return;
+    }
+
     runWriteOp([this, dn, attrName, attrValue]() {
                    return conn_->addAttribute(dn, attrName, {attrValue});
                },
