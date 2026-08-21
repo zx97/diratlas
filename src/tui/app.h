@@ -193,6 +193,7 @@ private:
     std::atomic<bool> pendingUpdate_{false};
     LDAPEntry pendingEntry_;              ///< Entry awaiting display
     std::set<std::string> pendingMandatory_;  ///< Mandatory attrs for pending entry
+    OCSchemaInfo pendingOcInfo_;          ///< objectClass schema info for pending entry
     std::string pendingLog_;              ///< Log message from background operation
 };
 
