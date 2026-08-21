@@ -75,6 +75,24 @@ struct OCSchemaInfo {
 OCSchemaInfo loadOCSchema(LDAPConn &conn);
 
 /**
+ * @brief Schema information about attribute types, loaded from the subschema
+ *        `attributeTypes` (RFC 4512). Used to decide which operations are
+ *        allowed on a value (e.g. duplicate / add only if multi-valued).
+ */
+struct AttrSchemaInfo {
+    /// attributeType name (lower-case) → parsed definition.
+    std::map<std::string, std::string> defs;
+    /// Whether the named type is defined in the subschema.
+    bool known(const std::string &lowerType) const { return defs.count(lowerType) > 0; }
+    /// Whether the attribute is SINGLE-VALUE (default: false when unknown).
+    bool singleValue(const std::string &lowerType) const;
+    /// Whether the attribute is NO-USER-MODIFICATION (default: false).
+    bool noUserModification(const std::string &lowerType) const;
+};
+/** @brief Load attributeTypes from the server subschema. */
+AttrSchemaInfo loadAttrSchema(LDAPConn &conn);
+
+/**
  * @brief Attribute display panel.
  *
  * Shows all attributes of a selected LDAP entry with sorting,

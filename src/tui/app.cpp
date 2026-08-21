@@ -12,6 +12,7 @@
 #include "attrs.h"
 #include "../ldapcore/bytes.h"
 #include "../ldapcore/dn.h"
+#include "../ldapcore/attrdesc.h"
 #include <ncurses.h>
 #include <locale.h>
 #include <cstring>
@@ -810,18 +811,9 @@ void App::handleKey(int ch) {
         return;
     }
 
-    // F2 in attributes panel: enter edit mode instead of Edit menu
+    // F2 in attributes panel: context menu for the attribute under the cursor.
     if (ch == KEY_F(2) && focus_ == FOCUS_ATTRS) {
-        int sr = attrs_->selectedRow();
-        if (sr >= 0 && sr < attrs_->rowCount()) {
-            std::string val = attrs_->getValue(sr);
-            attrs_->editMode_ = true;
-            attrs_->editRow_ = sr;
-            attrs_->editOrig_ = val;
-            attrs_->editStr_ = val;
-            attrs_->editPos_ = static_cast<int>(val.size());
-            log_ = "Editing " + attrs_->getAttrName(sr) + ": " + val;
-        }
+        appAttrMenu();
         return;
     }
 
@@ -1981,9 +1973,144 @@ void App::appDeleteAttr() {
     }
 }
 
+void App::appAttrMenu() {
+    if (!attrs_) return;
+    int sr = attrs_->selectedRow();
+    if (sr < 0 || sr >= attrs_->rowCount()) return;
+    std::string attrFull = attrs_->getAttrName(sr);  // may include ;options
+    if (attrFull.empty()) return;
+
+    // Split type / options (RFC 4512 §2.5.2).
+    diratlas::ldapcore::AttributeDescription ad;
+    bool parsed = diratlas::ldapcore::parseAttributeDescription(attrFull, ad);
+    std::string attrType = parsed ? ad.type : attrFull;
+    std::string val = attrs_->getValue(sr);
+
+    // Lazily load the attribute schema (only once per session).
+    if (attrSchema_.defs.empty())
+        attrSchema_ = loadAttrSchema(*conn_);
+
+    bool multi = parsed && !attrSchema_.singleValue(attrType);
+    bool prot = parsed && attrSchema_.noUserModification(attrType);
+
+    // Build the contextual action list (schema-aware).
+    std::vector<std::string> actions;
+    std::vector<char> keys;  // parallel action codes
+    actions.push_back("Edit value"); keys.push_back('e');
+    if (parsed && !ad.options.empty()) {
+        actions.push_back("Modify attribute options"); keys.push_back('o');
+    }
+    if (multi && !prot) {
+        actions.push_back("Add value"); keys.push_back('a');
+        if (!val.empty()) {
+            actions.push_back("Duplicate value"); keys.push_back('d');
+            actions.push_back("Delete value"); keys.push_back('v');
+        }
+    }
+    if (!prot) {
+        actions.push_back("Delete attribute"); keys.push_back('x');
+    }
+    if (actions.empty()) { setLog("No actions available for " + attrFull); return; }
+
+    int sel = 0;
+    if (appPickList("Attribute: " + attrFull, actions, sel) == 0) { setLog("Cancelled"); return; }
+    char code = keys[sel];
+
+    switch (code) {
+    case 'e':
+        attrs_->editMode_ = true;
+        attrs_->editRow_ = sr;
+        attrs_->editOrig_ = val;
+        attrs_->editStr_ = val;
+        attrs_->editPos_ = static_cast<int>(val.size());
+        log_ = "Editing " + attrFull + ": " + val.substr(0, 60);
+        break;
+    case 'o':
+        appAttrOptions();
+        break;
+    case 'a':
+        appAddAttr();  // reuses the add-attribute form (prefilled name)
+        break;
+    case 'd':
+        appAttrDuplicateValue();
+        break;
+    case 'v':
+        appDeleteAttr();
+        break;
+    case 'x':
+        appDeleteAttr();
+        break;
+    }
+}
+
+void App::appAttrDuplicateValue() {
+    std::string dn = tree_ ? tree_->selectedDN() : "";
+    if (dn.empty()) { setLog("Duplicate value: select an entry first"); return; }
+    int sr = attrs_->selectedRow();
+    if (sr < 0 || sr >= attrs_->rowCount()) return;
+    std::string attr = attrs_->getAttrName(sr);
+    std::string val = attrs_->getValue(sr);
+    if (attr.empty() || val.empty()) { setLog("Duplicate value: nothing to duplicate"); return; }
+    runWriteOp([this, dn, attr, val]() {
+                   return conn_->addAttribute(dn, attr, {val});
+               },
+               "Duplicated value of " + attr, "Duplicate value failed", false, true);
+}
+
+void App::appAttrOptions() {
+    if (!attrs_) return;
+    int sr = attrs_->selectedRow();
+    if (sr < 0 || sr >= attrs_->rowCount()) return;
+    std::string attrFull = attrs_->getAttrName(sr);
+    std::string dn = tree_ ? tree_->selectedDN() : "";
+
+    diratlas::ldapcore::AttributeDescription ad;
+    if (!diratlas::ldapcore::parseAttributeDescription(attrFull, ad)) {
+        setLog("Cannot parse attribute options"); return;
+    }
+    // Rebuild a comma-free option list, e.g. "binary,lang-en".
+    std::string optStr;
+    for (const auto &o : ad.options) {
+        if (!optStr.empty()) optStr += ",";
+        optStr += o;
+    }
+    std::vector<std::pair<std::string, std::string*>> fields = {
+        {"Attribute type:", &ad.type},
+        {"Options (comma):", &optStr},
+    };
+    if (appPopupForm("Attribute Options", fields, nullptr) == 0) { setLog("Cancelled"); return; }
+
+    // Rebuild the new AttributeDescription "type;opt1;opt2".
+    std::string newDesc = ad.type;
+    std::string opts = optStr;
+    std::string tok;
+    std::istringstream iss(opts);
+    while (std::getline(iss, tok, ',')) {
+        std::string t = tok;
+        size_t b = t.find_first_not_of(" \t");
+        if (b == std::string::npos) continue;
+        t = t.substr(b);
+        size_t e = t.find_last_not_of(" \t");
+        if (e != std::string::npos) t = t.substr(0, e + 1);
+        if (t.empty()) continue;
+        newDesc += ";";
+        newDesc += t;
+    }
+
+    if (newDesc == attrFull) { setLog("No change to options"); return; }
+    std::string oldDesc = attrFull;
+    // Replace the attribute description (delete old, add new). Value preserved.
+    std::string val = attrs_->getValue(sr);
+    runWriteOp([this, dn, oldDesc, newDesc, val]() {
+                   bool ok = conn_->deleteAttribute(dn, oldDesc);
+                   if (!ok) return false;
+                   return conn_->addAttribute(dn, newDesc, {val});
+               },
+               "Renamed " + oldDesc + " → " + newDesc, "Rename attribute failed", false, true);
+}
+
 void App::runWriteOp(const std::function<bool()> &op, const std::string &okMsg,
-                     const std::string &failMsg, bool refreshTree, bool reloadEntry) {
-    if (worker_.joinable()) worker_.join();
+                     const std::string &failMsg, bool refreshTree, bool reloadEntry) {    if (worker_.joinable()) worker_.join();
     cancel_.store(false);
     loading_.store(true);
     loadingStart_ = std::chrono::steady_clock::now();

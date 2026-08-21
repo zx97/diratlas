@@ -9,6 +9,7 @@
 
 #include "attrs.h"
 #include "../ldapcore/attrs.h"
+#include "../ldapcore/attrdesc.h"
 #include "../ad/format.h"
 #include <ncurses.h>
 #include <ctime>
@@ -16,6 +17,7 @@
 #include <set>
 #include <cstring>
 #include <cstdio>
+#include <cctype>
 
 namespace diratlas::tui {
 
@@ -411,17 +413,22 @@ void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mand
         bool mand = mandatory.count(attrName) > 0;
 
         const std::string lower = lowerName(attrName);
+        // Base type (RFC 4512 §2.5.2) used for schema/formatting decisions.
+        std::string baseType = lower;
+        diratlas::ldapcore::AttributeDescription ad;
+        if (diratlas::ldapcore::parseAttributeDescription(attrName, ad) && !ad.options.empty())
+            baseType = ad.type;
         const auto bit = entry.binaryAttributes.find(attrName);
         const std::vector<std::vector<uint8_t>> &byteVals =
             (bit == entry.binaryAttributes.end()) ? emptyBytes : bit->second;
 
-        // Per-value display strings (formatters expect lower-cased attribute names)
+        // Per-value display strings (formatters expect lower-cased base type)
         std::vector<std::string> disp;
-        if (flavor_ == LDAPFlavor::MicrosoftAD && diratlas::ad::isAdAttribute(lower)) {
+        if (flavor_ == LDAPFlavor::MicrosoftAD && diratlas::ad::isAdAttribute(baseType)) {
             disp = mergeAdEntries(diratlas::ad::formatAdAttribute(
-                lower, it->second, byteVals, kTuiTimeFormat, 0));
+                baseType, it->second, byteVals, kTuiTimeFormat, 0));
         } else {
-            auto gen = diratlas::ldapcore::formatAttribute(lower, it->second, byteVals, kTuiTimeFormat);
+            auto gen = diratlas::ldapcore::formatAttribute(baseType, it->second, byteVals, kTuiTimeFormat);
             for (const auto &g : gen)
                 disp.push_back(g.formatted);
         }
@@ -1210,6 +1217,50 @@ bool isOperationalAttr(const std::string &name) {
     if (name.rfind("msDS-", 0) == 0) return true;
     if (name.rfind("msExch", 0) == 0) return true;
     return false;
+}
+
+bool AttrSchemaInfo::singleValue(const std::string &lowerType) const {
+    auto it = defs.find(lowerType);
+    if (it == defs.end()) return false;  // unknown -> assume multi-valued (prudent)
+    // SINGLE-VALUE is a keyword token in the attributeType definition.
+    return it->second.find("SINGLE-VALUE") != std::string::npos ||
+           it->second.find("SINGLE VALUE") != std::string::npos;
+}
+
+bool AttrSchemaInfo::noUserModification(const std::string &lowerType) const {
+    auto it = defs.find(lowerType);
+    if (it == defs.end()) return false;
+    return it->second.find("NO-USER-MODIFICATION") != std::string::npos ||
+           it->second.find("NO-USER-MODIFICATION ") != std::string::npos;
+}
+
+AttrSchemaInfo loadAttrSchema(LDAPConn &conn) {
+    AttrSchemaInfo info;
+    auto rootDSE = conn.searchOne("", "(objectClass=*)", {"subschemaSubentry"}, false);
+    std::string subschemaDN = rootDSE.getAttr("subschemaSubentry");
+    if (subschemaDN.empty()) return info;
+    auto subschema = conn.searchOne(subschemaDN, "(objectClass=*)", {"attributeTypes"}, false);
+    auto allDefs = subschema.getAttrs("attributeTypes");
+    for (const auto &def : allDefs) {
+        // Extract the NAME 'x' (or NAME "x") — first occurrence after the OID.
+        size_t namePos = def.find(" NAME '");
+        char quote = '\'';
+        if (namePos == std::string::npos) {
+            namePos = def.find(" NAME \"");
+            quote = '"';
+        }
+        if (namePos == std::string::npos) continue;
+        namePos += 7;  // skip " NAME '"
+        size_t nameEnd = def.find(quote, namePos);
+        if (nameEnd == std::string::npos) continue;
+        std::string name = def.substr(namePos, nameEnd - namePos);
+        if (name.empty()) continue;
+        std::string lower;
+        for (char c : name)
+            lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        info.defs[lower] = def;
+    }
+    return info;
 }
 
 } // namespace diratlas::tui

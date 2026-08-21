@@ -852,8 +852,7 @@ bool LDAPConn::deleteAttribute(const std::string &dn, const std::string &attr) {
 
 /** @brief Remove a single value of an attribute (LDAP_MOD_DELETE with value). */
 bool LDAPConn::deleteAttributeValue(const std::string &dn, const std::string &attr,
-                                    const std::string &value) {
-    LDAPMod mod;
+                                    const std::string &value) {    LDAPMod mod;
     const char* vals[] = {value.c_str(), nullptr};
     mod.mod_op = LDAP_MOD_DELETE;
     mod.mod_type = const_cast<char*>(attr.c_str());
@@ -864,6 +863,20 @@ bool LDAPConn::deleteAttributeValue(const std::string &dn, const std::string &at
     lastErrno = rc;
     lastError = formatError(rc, ld);
     return rc == LDAP_SUCCESS;
+}
+
+int LDAPConn::compare(const std::string &dn, const std::string &attr,
+                      const std::string &value) {
+    BerValue bv{};
+    bv.bv_val = const_cast<char*>(value.data());
+    bv.bv_len = static_cast<ber_len_t>(value.size());
+    int rc = ldap_compare_ext_s(ld, dn.c_str(), attr.c_str(), &bv,
+                                nullptr, nullptr);
+    lastErrno = rc;
+    lastError = formatError(rc, ld);
+    if (rc == LDAP_COMPARE_TRUE) return 1;
+    if (rc == LDAP_COMPARE_FALSE) return 0;
+    return -1;
 }
 
 /** @brief Rename and/or move an entry (RFC 4511 ModifyDN). */

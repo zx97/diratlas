@@ -9,6 +9,7 @@
 
 #pragma once
 #include "tui.h"
+#include "attrs.h"
 #include "../ldap_conn.h"
 #include <memory>
 #include <string>
@@ -81,6 +82,12 @@ private:
     void appDeleteAttr();
     void appMoveEntry();
     void appDuplicateEntry(const std::string &sourceDN = "");
+    /** @brief Context menu (F2) for the attribute under the cursor, filtered by schema. */
+    void appAttrMenu();
+    /** @brief Duplicate the selected attribute value (adds a copy if multi-valued). */
+    void appAttrDuplicateValue();
+    /** @brief Edit the attribute's options (RFC 4512 §2.5.2). */
+    void appAttrOptions();
     void applyPendingConfirm(char ans);
     /** @brief Run a write operation on the worker thread; reports via pendingLog_.
      *  @param refreshTree Reload the tree after a successful write.
@@ -137,6 +144,7 @@ private:
     std::string log_;                     ///< Log bar text
     std::string filter_;                  ///< Active LDAP filter string
     std::string currentDN_;               ///< DN of last-selected entry
+    AttrSchemaInfo attrSchema_;           ///< attributeTypes from the subschema
 
     // ── Background operation support ──
     std::atomic<bool> loading_{false};    ///< Background LDAP search in progress

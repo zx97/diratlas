@@ -111,6 +111,7 @@ add_executable(diratlas
     src/main.cpp
     src/ldap_conn.cpp
     src/ldapcore/attrs.cpp
+    src/ldapcore/attrdesc.cpp
     src/ldapcore/bytes.cpp
     src/ldapcore/dn.cpp
     src/ad/flags.cpp
@@ -190,3 +191,16 @@ target_include_directories(test_dn PRIVATE
 target_compile_options(test_dn PRIVATE -Wall -Wextra)
 
 add_test(NAME test_dn COMMAND test_dn)
+
+add_executable(test_attrdesc
+    tests/test_attrdesc.cpp
+    src/ldapcore/attrdesc.cpp
+)
+
+target_include_directories(test_attrdesc PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_options(test_attrdesc PRIVATE -Wall -Wextra)
+
+add_test(NAME test_attrdesc COMMAND test_attrdesc)
