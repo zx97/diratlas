@@ -1496,7 +1496,7 @@ bool App::editTextPopup(const std::string &title, std::string &content) {
 
     const int cols = 72;
     const int rows = LINES - 6;
-    if (rows < 8) return false;
+    if (rows < 8) { timeout(100); return false; }
     int sy = (LINES - rows) / 2;
     int sx = (COLS - cols) / 2;
     if (sy < 0) sy = 0;
@@ -1846,13 +1846,13 @@ int App::appPopupForm(const std::string &title,
         }
 
         int ch = getch();
-        if (ch == 27) { done = true; return 0; }
+        if (ch == 27) { done = true; timeout(100); return 0; }
         if (ch == '\t') {
             int total = static_cast<int>(fields.size()) + (checkbox ? 1 : 0);
             focus = (focus + 1) % total;
             continue;
         }
-        if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) { done = true; return 1; }
+        if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) { done = true; timeout(100); return 1; }
         if (checkbox && focus == static_cast<int>(fields.size()) && (ch == ' ' || ch == '\t')) {
             checked = !checked;
             continue;
