@@ -1281,6 +1281,21 @@ bool AttrsWidget::handleKey(int ch) {
                 goToDN_ = "VIEWB64:" + rows_[selected_].name + "|" + dec;
                 return true;
             }
+            // Values with embedded newlines, or that wrap beyond the visible
+            // panel, open a full-content popup with a scrollbar.
+            const std::string &disp = displayOf(rows_[selected_]);
+            int valW = std::max(10, COLS - maxNameW_ - 4);
+            int visibleLines = std::max(5, LINES - 8);
+            int needLines = (static_cast<int>(disp.size()) + valW - 1) / valW;
+            if (needLines > visibleLines || val.find('\n') != std::string::npos) {
+                // Prefer the raw value when it is readable text (keeps embedded
+                // newlines); fall back to the formatted display for HEX/binary.
+                bool rawIsText = !val.empty();
+                for (unsigned char c : val)
+                    if (c < 0x20 && c != '\n' && c != '\r' && c != '\t') { rawIsText = false; break; }
+                goToDN_ = "VIEWFULL:" + rows_[selected_].name + "|" + (rawIsText ? val : disp);
+                return true;
+            }
             // If value looks like a DN, load that entry
             if (val.find('=') != std::string::npos && val.find(',') != std::string::npos) {
                 goToDN_ = val;

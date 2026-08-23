@@ -1101,7 +1101,14 @@ void App::handleKey(int ch) {
         }
         // Check if a DN was selected for navigation
 
-        if (attrs_->goToDN_.find("VIEWB64:") == 0) {
+        if (attrs_->goToDN_.find("VIEWFULL:") == 0) {
+            std::string rest = attrs_->goToDN_.substr(9);
+            attrs_->goToDN_.clear();
+            auto sep = rest.find('|');
+            std::string attr = (sep == std::string::npos) ? "" : rest.substr(0, sep);
+            std::string content = (sep == std::string::npos) ? rest : rest.substr(sep + 1);
+            showValuePopup("Full value", content, "", currentDN_);
+        } else if (attrs_->goToDN_.find("VIEWB64:") == 0) {
             std::string rest = attrs_->goToDN_.substr(8);
             attrs_->goToDN_.clear();
             auto sep = rest.find('|');
@@ -1432,6 +1439,13 @@ void App::showValuePopup(const std::string &title, const std::string &content,
             if (ch == 27 || ch == 'q' || ch == 'Q') goto done;
             if (ch == KEY_UP && scroll > 0) scroll--;
             if (ch == KEY_DOWN && scroll + contentH < static_cast<int>(lines.size())) scroll++;
+            if (ch == KEY_PPAGE) scroll = std::max(0, scroll - contentH);
+            if (ch == KEY_NPAGE)
+                scroll = std::min<int>(std::max(0, static_cast<int>(lines.size()) - contentH),
+                                       scroll + contentH);
+            if (ch == KEY_HOME) scroll = 0;
+            if (ch == KEY_END)
+                scroll = std::max(0, static_cast<int>(lines.size()) - contentH);
             // Edit button / F2: open the multi-line editor on the decoded text.
             if (!attrName.empty() && !dn.empty() &&
                 (ch == '\n' || ch == '\r' || ch == KEY_ENTER || ch == KEY_F(2))) {
