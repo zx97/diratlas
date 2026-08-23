@@ -819,6 +819,12 @@ void App::handleKey(int ch) {
         return;
     }
 
+    // F5 = refresh the currently selected entry from the server.
+    if (ch == KEY_F(5)) {
+        loadSelectedEntry();
+        return;
+    }
+
     // F-keys: open menus (F1-F8, F11-F12 only)
     if (ch >= KEY_F(1) && ch <= KEY_F(12)) {
         int idx = ch - KEY_F(1);

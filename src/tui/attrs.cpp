@@ -10,6 +10,7 @@
 #include "attrs.h"
 #include "../ldapcore/attrs.h"
 #include "../ldapcore/attrdesc.h"
+#include "../ldapcore/bytes.h"
 #include "../ad/format.h"
 #include <ncurses.h>
 #include <ctime>
@@ -494,7 +495,16 @@ void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mand
 
         // Per-value display strings (formatters expect lower-cased base type)
         std::vector<std::string> disp;
-        if (flavor_ == LDAPFlavor::MicrosoftAD && diratlas::ad::isAdAttribute(baseType)) {
+        if (ad.binary()) {
+            // RFC 4512 §2.5.2: the ;binary option requests OCTET STRING
+            // interpretation, so render every value as HEX bytes even when the
+            // server returned a plain string.
+            for (size_t vi = 0; vi < it->second.size(); ++vi) {
+                const auto &bytes = (vi < byteVals.size()) ? byteVals[vi]
+                    : std::vector<uint8_t>(it->second[vi].begin(), it->second[vi].end());
+                disp.push_back("HEX{" + diratlas::ldapcore::bytesToHex(bytes) + "}");
+            }
+        } else if (flavor_ == LDAPFlavor::MicrosoftAD && diratlas::ad::isAdAttribute(baseType)) {
             disp = mergeAdEntries(diratlas::ad::formatAdAttribute(
                 baseType, it->second, byteVals, kTuiTimeFormat, 0));
         } else {
