@@ -1367,19 +1367,32 @@ void App::showValuePopup(const std::string &title, const std::string &content,
     bool edited = false;
 
     for (;;) {
-        // Split content into lines (preserving embedded newlines).
+        // Popup width (used both for sizing and for wrapping long lines).
+        const int cols = 72;
+
+        // Split content into lines (preserving embedded newlines), wrapping
+        // long physical lines to the popup width so no content is hidden
+        // off-screen.
+        const int wrapWidth = cols - 2;
         std::vector<std::string> lines;
         {
             std::string cur;
+            auto flush = [&]() {
+                while (static_cast<int>(cur.size()) > wrapWidth) {
+                    lines.push_back(cur.substr(0, wrapWidth));
+                    cur.erase(0, wrapWidth);
+                }
+                lines.push_back(cur);
+                cur.clear();
+            };
             for (char c : current) {
-                if (c == '\n') { lines.push_back(cur); cur.clear(); }
+                if (c == '\n') flush();
                 else cur += c;
             }
-            lines.push_back(cur);
+            flush();
         }
 
         // Popup sized to fit content, capped to the terminal.
-        int cols = 72;
         int maxRows = LINES - 4;
         int rows = std::min<int>(maxRows, static_cast<int>(lines.size()) + 5);
         if (rows < 7) rows = 7;
@@ -1413,10 +1426,7 @@ void App::showValuePopup(const std::string &title, const std::string &content,
             int fy = sy + 1;
             int lineEnd = std::min<int>(static_cast<int>(lines.size()), scroll + contentH);
             for (int i = scroll; i < lineEnd && fy < sy + rows - 1; i++, fy++) {
-                std::string seg = lines[i];
-                if (static_cast<int>(seg.size()) > cols - 2)
-                    seg = seg.substr(0, cols - 2);
-                mvwaddstr(stdscr, fy, sx + 1, seg.c_str());
+                mvwaddstr(stdscr, fy, sx + 1, lines[i].c_str());
             }
 
             // Bottom bar: [Edit] button (only when writable) + hints
