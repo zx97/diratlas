@@ -47,3 +47,8 @@ session_*.md
 
 # Auto-generated build metadata (replaced by git-derived build number)
 build_number.txt
+
+# Sensitive / private artifacts (never publish)
+da.tar.xz
+ldap_fix_*
+*.bak
