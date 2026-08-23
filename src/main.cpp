@@ -213,6 +213,16 @@ struct Config {
     std::string passwdNew;
     /// --cancel <msgid>: RFC 3909 cancel an in-flight operation by msgid
     int cancelMsgid = -1;
+    /// --abandon <msgid>: RFC 4511 §4.11 abandon an in-flight operation by msgid
+    int abandonMsgid = -1;
+    /// --increment attr=delta: RFC 4525 modify-increment on the -b target
+    std::string incrementSpec;
+    /// --capabilities[=name]: print a RootDSE capability attribute (default supportedCapabilities)
+    std::string capabilities;
+    /// --persistent-search: keep the search open and print changes (RFC 4533)
+    bool persistentSearch = false;
+    /// --sync-refresh-only: single sync refresh pass (RFC 4533)
+    bool syncRefreshOnly = false;
     /// --extended-op <oid>[:hex]: generic extended operation request
     std::string extOpSpec;
     // ---- TLS options filled from -o / ldaprc ----
@@ -300,8 +310,13 @@ static void printUsage(const char *prog) {
               << "  --passwd-modify[=dn]  RFC 3062 password change (user = bind DN if omitted)\n"
               << "  --passwd-old <pw>     RFC 3062 old password\n"
               << "  --passwd-new <pw>     RFC 3062 new password (omit: server generates)\n"
-              << "  --cancel <msgid>      RFC 3909 cancel an operation by message id\n"
-              << "  --extended-op <oid>[:hex]  Generic extended operation\n\n"
+<< "  --cancel <msgid>      RFC 3909 cancel an operation by message id\n"
+               << "  --abandon <msgid>     RFC 4511 abandon an operation by message id\n"
+               << "  --increment attr=delta  RFC 4525 modify-increment on the -b entry\n"
+               << "  --capabilities[=name] Print a RootDSE capability attribute\n"
+               << "  --persistent-search   RFC 4533-style persistent search (server-dependent)\n"
+               << "  --sync-refresh-only   RFC 4533 sync refreshOnly pass\n"
+               << "  --extended-op <oid>[:hex]  Generic extended operation\n\n"
               << "DirAtlas TUI options (default mode):\n"
               << "  --emojis              Prefix tree nodes with emojis\n"
               << "  --colors              Colorize output\n"
@@ -745,6 +760,11 @@ int main(int argc, char **argv) {
         {"passwd-old", required_argument, nullptr, 0},
         {"passwd-new", required_argument, nullptr, 0},
         {"cancel",     required_argument, nullptr, 0},
+        {"abandon",    required_argument, nullptr, 0},
+        {"increment",  required_argument, nullptr, 0},
+        {"capabilities", optional_argument, nullptr, 0},
+        {"persistent-search", no_argument, nullptr, 0},
+        {"sync-refresh-only", no_argument, nullptr, 0},
         {"extended-op", required_argument, nullptr, 0},
         {"cli",        no_argument,       nullptr, 0},
         {"doc",        no_argument,       nullptr, 0},
@@ -785,6 +805,11 @@ int main(int argc, char **argv) {
                 else if (name == "passwd-old") cfg.passwdOld = optarg;
                 else if (name == "passwd-new") cfg.passwdNew = optarg;
                 else if (name == "cancel") cfg.cancelMsgid = std::stoi(optarg);
+                else if (name == "abandon") cfg.abandonMsgid = std::stoi(optarg);
+                else if (name == "increment") cfg.incrementSpec = optarg;
+                else if (name == "capabilities") cfg.capabilities = optarg ? optarg : "supportedCapabilities";
+                else if (name == "persistent-search") cfg.persistentSearch = true;
+                else if (name == "sync-refresh-only") cfg.syncRefreshOnly = true;
                 else if (name == "extended-op") cfg.extOpSpec = optarg;
                 else if (name == "doc") { printDocumentation(); return 0; }
                 else if (name == "filter") { cfg.searchFilter = optarg; cfg.filterSet = true; }
@@ -1143,6 +1168,72 @@ int main(int argc, char **argv) {
         }
         std::cout << "Cancel sent for msgid " << cfg.cancelMsgid << std::endl;
         if (cfg.cli) return 0;
+    }
+
+    // ── RFC 4511 §4.11 Abandon ──
+    if (cfg.abandonMsgid >= 0) {
+        if (!conn.abandon(cfg.abandonMsgid)) {
+            std::cerr << "Abandon failed: " << conn.getLastError() << std::endl;
+            return 1;
+        }
+        std::cout << "Abandon sent for msgid " << cfg.abandonMsgid << std::endl;
+        if (cfg.cli) return 0;
+    }
+
+    // ── RFC 4525 Modify-Increment ──
+    if (!cfg.incrementSpec.empty()) {
+        if (cfg.base.empty()) {
+            std::cerr << "--increment needs a target entry DN via -b" << std::endl;
+            return 1;
+        }
+        auto eq = cfg.incrementSpec.find('=');
+        if (eq == std::string::npos) {
+            std::cerr << "--increment expects attr=delta (e.g. --increment loginCount=1)" << std::endl;
+            return 1;
+        }
+        std::string attr = cfg.incrementSpec.substr(0, eq);
+        std::string delta = cfg.incrementSpec.substr(eq + 1);
+        if (!conn.modifyIncrement(cfg.base, attr, delta)) {
+            std::cerr << "Modify-Increment failed: " << conn.getLastError() << std::endl;
+            return 1;
+        }
+        std::cout << "Incremented " << attr << " by " << delta << " on " << cfg.base << std::endl;
+        if (cfg.cli) return 0;
+    }
+
+    // ── RootDSE capabilities ──
+    if (!cfg.capabilities.empty()) {
+        for (const auto &v : conn.getCapabilities(cfg.capabilities))
+            std::cout << cfg.capabilities << ": " << v << std::endl;
+        if (cfg.cli) return 0;
+    }
+
+    // ── RFC 4533 Persistent Search / Sync refresh ──
+    if (cfg.persistentSearch) {
+        if (!conn.persistentSearch(cfg.base, cfg.scope, cfg.searchFilter,
+                                   cfg.cliAttrs, cfg.timelimit,
+                                   [&](const std::string &dn, const std::string &change) {
+                                       std::cout << change << " " << dn << std::endl;
+                                       return true;
+                                   })) {
+            std::cerr << "Persistent search failed: " << conn.getLastError() << std::endl;
+            return 1;
+        }
+        return 0;
+    }
+    if (cfg.syncRefreshOnly) {
+        std::vector<diratlas::LDAPEntry> results;
+        std::string cookie;
+        if (!conn.syncRefreshOnly(cfg.base, cfg.scope, cfg.searchFilter,
+                                  cfg.cliAttrs, results, cookie)) {
+            std::cerr << "Sync refresh failed: " << conn.getLastError() << std::endl;
+            return 1;
+        }
+        for (const auto &e : results)
+            std::cout << "dn: " << e.dn << std::endl;
+        if (!cookie.empty())
+            std::cout << "sync cookie: " << cookie << std::endl;
+        return 0;
     }
 
     // ── Generic extended operation (e.g. PingDS Get Connection ID) ──

@@ -202,6 +202,19 @@ bool LDAPConn::cancelOperation(int msgid) {
     return rc == LDAP_SUCCESS;
 }
 
+bool LDAPConn::abandon(int msgid) {
+    if (!ld) return false;
+    lastErrno = 0;
+    lastError.clear();
+    // ldap_abandon_ext returns a non-zero value only for API misuse, not for a
+    // server error, and the server never sends an Abandon response (RFC 4511
+    // §4.11), so report success when the request was handed to the wire.
+    int rc = ldap_abandon_ext(ld, msgid, nullptr, nullptr);
+    lastErrno = rc;
+    lastError = formatError(rc, ld);
+    return rc == LDAP_SUCCESS;
+}
+
 bool LDAPConn::extendedOp(const std::string &oid, const std::vector<uint8_t> &req,
                           std::vector<uint8_t> &res) {
     if (!ld) return false;
@@ -624,6 +637,237 @@ LDAPEntry LDAPConn::searchOne(const std::string &baseDN, const std::string &filt
     return {};
 }
 
+namespace {
+// Build a NULL-terminated char* array from a comma-joined attribute list.
+// The returned pointers reference the provided std::string's buffer, which
+// must therefore outlive the array (same pattern as LDAPConn::search).
+std::vector<const char*> buildAttrArray(std::string &joined) {
+    std::vector<const char*> out;
+    char *copy = joined.data();
+    char *token = strtok(copy, ",");
+    while (token) { out.push_back(token); token = strtok(nullptr, ","); }
+    out.push_back(nullptr);
+    return out;
+}
+} // namespace
+
+bool LDAPConn::persistentSearch(const std::string &baseDN, int scope,
+                                const std::string &filter,
+                                const std::vector<std::string> &attrs, int maxWaitSec,
+                                const std::function<bool(const std::string &dn,
+                                                         const std::string &change)> &callback) {
+    if (!ld) return false;
+    lastErrno = 0;
+    lastError.clear();
+    std::string attrsJoined;
+    for (const auto &a : attrs) {
+        if (!attrsJoined.empty()) attrsJoined += ",";
+        attrsJoined += a;
+    }
+    if (attrsJoined.empty()) attrsJoined = "*,+";
+    auto attrArray = buildAttrArray(attrsJoined);
+
+    // RFC 4533-style persistent search control (draft-ietf-ldapext-psearch):
+    // changeTypes=all (7), changesOnly=false, returnECs=true.
+    LDAPControl psCtrl;
+    BerValue psVal{};
+    struct berval created = {};
+    if (ldap_create_persistentsearch_control_value(ld, 7, 0, 1, &created) == LDAP_SUCCESS) {
+        psVal.bv_val = created.bv_val;
+        psVal.bv_len = created.bv_len;
+    }
+    psCtrl.ldctl_oid = const_cast<char*>(LDAP_CONTROL_PERSIST_REQUEST);
+    psCtrl.ldctl_value = psVal;
+    psCtrl.ldctl_iscritical = 1;
+
+    LDAPControl *srvCtrls[] = {&psCtrl, nullptr};
+    struct timeval tv = {maxWaitSec, 0};
+    int msgid = 0;
+    int rc = ldap_search_ext(ld, baseDN.c_str(), scope, filter.c_str(),
+                             const_cast<char**>(attrArray.data()), 0,
+                             srvCtrls, nullptr, &tv, 0, &msgid);
+    if (created.bv_val) ber_memfree(created.bv_val);
+    if (rc != LDAP_SUCCESS) {
+        lastErrno = rc;
+        lastError = formatError(rc, ld);
+        return false;
+    }
+
+    bool ended = false;
+    while (!ended) {
+        LDAPMessage *res = nullptr;
+        struct timeval wait = {maxWaitSec, 0};
+        rc = ldap_result(ld, msgid, LDAP_MSG_ONE, &wait, &res);
+        if (rc == -1) {
+            int err = LDAP_UNAVAILABLE;
+            ldap_get_option(ld, LDAP_OPT_ERROR_NUMBER, &err);
+            lastErrno = err;
+            lastError = formatError(err, ld);
+            return false;
+        }
+        if (rc == 0) {
+            lastErrno = LDAP_TIMEOUT;
+            lastError = formatError(LDAP_TIMEOUT, ld);
+            return false;
+        }
+
+        int msgtype = ldap_msgtype(res);
+        if (msgtype == LDAP_RES_SEARCH_ENTRY) {
+            char *dn = ldap_get_dn(ld, res);
+            std::string dnStr = dn ? dn : "";
+            if (dn) ldap_memfree(dn);
+
+            std::string change = "entry";
+            LDAPControl **rctrls = nullptr;
+            ldap_parse_result(ld, res, nullptr, nullptr, nullptr, nullptr, &rctrls, 0);
+            if (rctrls) {
+                for (int i = 0; rctrls[i]; i++) {
+                    if (rctrls[i]->ldctl_oid &&
+                        strcmp(rctrls[i]->ldctl_oid, LDAP_CONTROL_PERSIST_ENTRY_CHANGE_NOTICE) == 0 &&
+                        rctrls[i]->ldctl_value.bv_val && rctrls[i]->ldctl_value.bv_len >= 5) {
+                        // BER: SEQUENCE { ENUMERATED changeType, ... } → type at byte 4
+                        switch (rctrls[i]->ldctl_value.bv_val[4]) {
+                            case 1: change = "add"; break;
+                            case 2: change = "delete"; break;
+                            case 4: change = "modify"; break;
+                            case 8: change = "moddn"; break;
+                            default: change = "entry"; break;
+                        }
+                    }
+                }
+                ldap_controls_free(rctrls);
+            }
+            if (callback && !callback(dnStr, change)) {
+                ldap_msgfree(res);
+                ldap_abandon_ext(ld, msgid, nullptr, nullptr);
+                return true;
+            }
+        } else if (msgtype == LDAP_RES_SEARCH_RESULT) {
+            int errcode = 0;
+            ldap_parse_result(ld, res, &errcode, nullptr, nullptr, nullptr, nullptr, 0);
+            lastErrno = errcode;
+            lastError = formatError(errcode, ld);
+            ended = true;
+        }
+        ldap_msgfree(res);
+    }
+    return true;
+}
+
+bool LDAPConn::syncRefreshOnly(const std::string &baseDN, int scope,
+                               const std::string &filter,
+                               const std::vector<std::string> &attrs,
+                               std::vector<LDAPEntry> &results, std::string &cookie) {
+    if (!ld) return false;
+    lastErrno = 0;
+    lastError.clear();
+    results.clear();
+    cookie.clear();
+    std::string attrsJoined;
+    for (const auto &a : attrs) {
+        if (!attrsJoined.empty()) attrsJoined += ",";
+        attrsJoined += a;
+    }
+    if (attrsJoined.empty()) attrsJoined = "*,+";
+    auto attrArray = buildAttrArray(attrsJoined);
+
+    // RFC 4533 syncRequestValue: SEQUENCE { mode ENUMERATED (1=refreshOnly) }
+    BerElement *ber = ber_alloc_t(LBER_USE_DER);
+    if (!ber) return false;
+    ber_printf(ber, "{e}", 1);
+    struct berval bv = {};
+    ber_flatten2(ber, &bv, 1);
+
+    LDAPControl syncCtrl;
+    syncCtrl.ldctl_oid = const_cast<char*>(LDAP_CONTROL_SYNC);
+    syncCtrl.ldctl_value = bv;
+    syncCtrl.ldctl_iscritical = 1;
+    LDAPControl *srvCtrls[] = {&syncCtrl, nullptr};
+
+    struct timeval tv = {timelimit, 0};
+    int msgid = 0;
+    int rc = ldap_search_ext(ld, baseDN.c_str(), scope, filter.c_str(),
+                             const_cast<char**>(attrArray.data()), 0,
+                             srvCtrls, nullptr, &tv, sizelimit, &msgid);
+    if (rc != LDAP_SUCCESS) {
+        lastErrno = rc;
+        lastError = formatError(rc, ld);
+        return false;
+    }
+
+    LDAPMessage *res = nullptr;
+    rc = ldap_result(ld, msgid, LDAP_MSG_ALL, &tv, &res);
+    if (rc <= 0) {
+        if (res) ldap_msgfree(res);
+        lastErrno = rc == 0 ? LDAP_TIMEOUT : LDAP_UNAVAILABLE;
+        lastError = formatError(lastErrno, ld);
+        return false;
+    }
+
+    LDAPControl **rctrls = nullptr;
+    ldap_parse_result(ld, res, nullptr, nullptr, nullptr, nullptr, &rctrls, 0);
+    if (rctrls) {
+        for (int i = 0; rctrls[i]; i++) {
+            // SyncDoneValue ::= SEQUENCE { cookie OCTET STRING OPTIONAL, ... }
+            if (rctrls[i]->ldctl_oid &&
+                strcmp(rctrls[i]->ldctl_oid, LDAP_CONTROL_SYNC_DONE) == 0 &&
+                rctrls[i]->ldctl_value.bv_val && rctrls[i]->ldctl_value.bv_len >= 4) {
+                BerValue val = rctrls[i]->ldctl_value;
+                // skip SEQUENCE tag+len, expect OCTET STRING tag
+                size_t off = 0;
+                if (val.bv_val[off] == 0x30) {
+                    off++;
+                    if ((val.bv_val[off] & 0x80) == 0) off += 1;
+                    else off += 1 + (val.bv_val[off] & 0x7F);
+                }
+                if (off + 2 <= val.bv_len && val.bv_val[off] == 0x04) {
+                    size_t len = val.bv_val[off + 1];
+                    if (len < 128 && off + 2 + len <= val.bv_len)
+                        cookie.assign(reinterpret_cast<char*>(val.bv_val + off + 2), len);
+                }
+            }
+        }
+        ldap_controls_free(rctrls);
+    }
+
+    for (LDAPMessage *msg = ldap_first_entry(ld, res); msg != nullptr;
+         msg = ldap_next_entry(ld, msg)) {
+        LDAPEntry entry;
+        char *dn = ldap_get_dn(ld, msg);
+        if (dn) { entry.dn = dn; ldap_memfree(dn); }
+        BerElement *ber2 = nullptr;
+        char *attr = ldap_first_attribute(ld, msg, &ber2);
+        while (attr) {
+            entry.attributeNames.push_back(attr);
+            BerValue **bvals = ldap_get_values_len(ld, msg, attr);
+            if (bvals) {
+                int count = ldap_count_values_len(bvals);
+                std::vector<std::string> strVals;
+                std::vector<std::vector<uint8_t>> binVals;
+                for (int i = 0; i < count; i++) {
+                    if (bvals[i]->bv_val && bvals[i]->bv_len > 0) {
+                        strVals.push_back(std::string(bvals[i]->bv_val, bvals[i]->bv_len));
+                        binVals.push_back(std::vector<uint8_t>(bvals[i]->bv_val,
+                                                               bvals[i]->bv_val + bvals[i]->bv_len));
+                    } else {
+                        strVals.emplace_back();
+                        binVals.emplace_back();
+                    }
+                }
+                entry.attributes[attr] = strVals;
+                entry.binaryAttributes[attr] = binVals;
+                ldap_value_free_len(bvals);
+            }
+            ldap_memfree(attr);
+            attr = ldap_next_attribute(ld, msg, ber2);
+        }
+        if (ber2) ber_free(ber2, 0);
+        results.push_back(std::move(entry));
+    }
+    if (res) ldap_msgfree(res);
+    return true;
+}
+
 // ── Info / Discovery ────────────────────────────────────
 
 /**
@@ -672,6 +916,11 @@ bool LDAPConn::findRootDN(std::string &rootDN) {
 std::vector<std::string> LDAPConn::findNamingContexts() {
     auto entry = searchOne("", "(objectClass=*)", {"namingContexts"}, false);
     return entry.getAttrs("namingContexts");
+}
+
+std::vector<std::string> LDAPConn::getCapabilities(const std::string &what) {
+    auto entry = searchOne("", "(objectClass=*)", {what}, false);
+    return entry.getAttrs(what);
 }
 
 /**
@@ -833,6 +1082,31 @@ bool LDAPConn::replaceAttributeValue(const std::string &dn, const std::string &a
     int rc = ldap_modify_ext_s(ld, dn.c_str(), mods, nullptr, nullptr);
     lastErrno = rc;
     lastError = formatError(rc, ld);
+    return rc == LDAP_SUCCESS;
+}
+
+bool LDAPConn::modifyIncrement(const std::string &dn, const std::string &attr,
+                               const std::string &delta) {
+    if (!ld) return false;
+    lastErrno = 0;
+    lastError.clear();
+
+    // RFC 4525: the delta is carried as the attribute value (ASCII integer).
+    LDAPMod mod;
+    BerValue bv{};
+    bv.bv_val = const_cast<char*>(delta.data());
+    bv.bv_len = static_cast<ber_len_t>(delta.size());
+    BerValue *bvals[] = {&bv, nullptr};
+    mod.mod_op = LDAP_MOD_INCREMENT;
+    mod.mod_type = const_cast<char*>(attr.c_str());
+    mod.mod_bvalues = bvals;
+
+    LDAPMod *mods[] = {&mod, nullptr};
+    int rc = ldap_modify_ext_s(ld, dn.c_str(), mods, nullptr, nullptr);
+    lastErrno = rc;
+    lastError = formatError(rc, ld);
+    diratlas::dbgLog(diratlas::LDAP_DEBUG_STATS, "modify-increment: " + attr + " " + delta
+        + " on " + dn + " -> " + std::to_string(rc));
     return rc == LDAP_SUCCESS;
 }
 

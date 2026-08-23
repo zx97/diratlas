@@ -79,6 +79,12 @@ public:
                         const std::string &newPw, std::string &generatedPw);
     /** @brief RFC 3909 Cancel an in-flight operation by its message ID. */
     bool cancelOperation(int msgid);
+    /**
+     * @brief RFC 4511 §4.11 Abandon an in-flight operation by message ID.
+     * Unlike Cancel, Abandon gets no server response and is a fire-and-forget
+     * client-side request.
+     */
+    bool abandon(int msgid);
     /** @brief Send an arbitrary extended request and read its response value. */
     bool extendedOp(const std::string &oid, const std::vector<uint8_t> &req,
                     std::vector<uint8_t> &res);
@@ -92,10 +98,40 @@ public:
     LDAPEntry searchOne(const std::string &baseDN, const std::string &filter,
                          const std::vector<std::string> &attrs, bool showDeleted);
 
+    /**
+     * @brief RFC 4533 Persistent Search: keep the search open and report
+     *        entry changes as they happen, until the server sends the final
+     *        result, maxWaitSec elapses, or the callback returns false.
+     * @param callback Invoked once per changed entry with its DN and a
+     *        human-readable change kind ("add"/"modify"/"delete"/"entry").
+     *        Return false to stop the loop.
+     * @return true if the loop ended cleanly (final result received).
+     */
+    bool persistentSearch(const std::string &baseDN, int scope,
+                          const std::string &filter,
+                          const std::vector<std::string> &attrs, int maxWaitSec,
+                          const std::function<bool(const std::string &dn,
+                                                   const std::string &change)> &callback);
+    /**
+     * @brief RFC 4533 Sync (refreshOnly mode): one refresh pass that returns
+     *        all matching entries plus the sync cookie for the next pass.
+     */
+    bool syncRefreshOnly(const std::string &baseDN, int scope,
+                         const std::string &filter,
+                         const std::vector<std::string> &attrs,
+                         std::vector<LDAPEntry> &results, std::string &cookie);
+
     /** @brief Auto-detect the root DN from namingContexts. */
     bool findRootDN(std::string &rootDN);
     /** @brief Fetch the list of namingContexts from the RootDSE. */
     std::vector<std::string> findNamingContexts();
+    /**
+     * @brief Read RootDSE capability attributes.
+     * @param what "supportedCapabilities" | "supportedFeatures" |
+     *             "supportedControl" | "supportedExtension".
+     * @return The raw values of that RootDSE attribute.
+     */
+    std::vector<std::string> getCapabilities(const std::string &what);
     /** @brief Detect backend flavour (MicrosoftAD vs StandardLDAP). */
     void guessFlavor();
 
@@ -110,6 +146,16 @@ public:
     /** @brief Atomically replace one value of an attribute (DELETE old + ADD new). */
     bool replaceAttributeValue(const std::string &dn, const std::string &attr,
                                const std::string &oldValue, const std::string &newValue);
+    /**
+     * @brief RFC 4525 Modify-Increment: add a signed integer delta to an
+     *        attribute value without a read-modify-write round trip.
+     * @param dn    The entry DN.
+     * @param attr  AttributeDescription (type, and optionally ;options).
+     * @param delta Signed integer delta, e.g. "5" or "-2".
+     * @return true on success; on failure getLastError() holds the message.
+     */
+    bool modifyIncrement(const std::string &dn, const std::string &attr,
+                         const std::string &delta);
     /**
      * @brief RFC 4511 §4.10 Compare: check whether an attribute value matches.
      * @param dn    The entry DN.
