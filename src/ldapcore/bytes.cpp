@@ -30,6 +30,8 @@ uint32_t readLE32(const std::vector<uint8_t> &b, size_t off) {
 
 bool isPrintable(const std::vector<uint8_t> &b) {
     for (uint8_t x : b) {
+        // LF, CR and TAB are legitimate text whitespace, not binary markers.
+        if (x == '\n' || x == '\r' || x == '\t') continue;
         if (x < 0x20 || x == 0x7F) return false;
     }
     return true;
