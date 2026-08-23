@@ -43,6 +43,10 @@ OpenLDAP tools; GNU long options are also accepted):
 
 ./build/diratlas doc          # full embedded documentation
 ./build/diratlas -V           # version
+./build/diratlas --abandon 42      # RFC 4511 abandon msgid 42
+./build/diratlas --increment uidNumber=5 -b 'uid=u,dc=example,dc=com'  # RFC 4525
+./build/diratlas --capabilities    # RootDSE supportedCapabilities
+./build/diratlas --sync-refresh-only -b dc=example,dc=com  # RFC 4533 sync pass
 ```
 
 See `diratlas --help` or `diratlas doc` for the full option reference.
@@ -213,6 +217,7 @@ Key editing actions (all in the **Edit** menu, `F1..F8` open the menu bar):
 | Add attribute | `Edit ▸ Add attribute` | name + value prompt; **schema-checked** (see below) |
 | Delete attribute | `Edit ▸ Delete attribute` | confirm prompt; per-value prompt for multi-valued |
 | Attribute context menu | `F2` on the attributes panel | **dynamic** menu with schema-aware actions (see below) |
+| Refresh entry | `F5` | reloads the currently selected entry from the server |
 
 ### Attribute context menu (F2)
 
