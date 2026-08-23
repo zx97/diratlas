@@ -292,7 +292,7 @@ static void printUsage(const char *prog) {
               << "DirAtlas CLI options (with --cli):\n"
               << "  --cli                 CLI mode (no TUI)\n"
               << "  --filter <f>          Search filter (default: (objectClass=*))\n"
-              << "  --simplePageSize <n>  Paged results page size (default: 800)\n"
+              << "  --simplePageSize <n>  Paged results page size (0 = off; default: off, TUI uses 800)\n"
               << "  --wrapColumn <n>      Wrap LDIF output at n columns (-o ldif_wrap=)\n"
               << "  --countEntries        Print total number of matching entries\n"
               << "  --deleted             Include deleted objects\n"

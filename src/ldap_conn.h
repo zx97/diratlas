@@ -189,8 +189,10 @@ public:
     std::string serverVersion;
     /// Default root DN for searches
     std::string defaultRootDN;
-    /// LDAP paging size
-    uint32_t pagingSize{800};
+    /// LDAP paging size (0 = off; ldapsearch-compatible default. Some
+    /// servers misbehave with the paged-results control, so paging is opt-in
+    /// via --simplePageSize or -E pr=.)
+    uint32_t pagingSize{0};
     /// Search size limit (number of entries; 0 = unlimited, -z)
     int sizelimit{0};
     /// Operation time limit in seconds
