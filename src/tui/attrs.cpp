@@ -912,6 +912,15 @@ static void drawSchemaValue(WINDOW *win, int y, int x, int maxW,
             if (end == std::string::npos) end = val.size();
             len = static_cast<int>(end - i);
             std::string word = val.substr(i, len);
+            // Numeric-only "words" (OIDs or wrapped continuation like ".115.1")
+            // are green, never red.
+            bool hasLetter = false;
+            for (char c : word)
+                if (std::isalpha(static_cast<unsigned char>(c))) { hasLetter = true; break; }
+            if (!hasLetter) {
+                color = CP_ATTR_TIME_NEW;
+                attr = A_BOLD;
+            } else {
             bool allUpper = true;
             for (char c : word) { if (islower(c)) { allUpper = false; break; } }
             if (allUpper) {
@@ -949,6 +958,7 @@ static void drawSchemaValue(WINDOW *win, int y, int x, int maxW,
                     attr |= A_BOLD;
                 }
             }
+            }
         }
         // Dollar sign (MUST/MAY separator)
         else if (val[i] == '$') {
@@ -967,7 +977,8 @@ static void drawSchemaValue(WINDOW *win, int y, int x, int maxW,
                 cx++;
             } else {
                 mvwaddstr(win, y, cx, val.substr(i, static_cast<size_t>(len)).c_str());
-                int cw = wcwidth(static_cast<wchar_t>(utf8Decode(val, i, &len)));
+                int clen = 0;
+                int cw = wcwidth(static_cast<wchar_t>(utf8Decode(val, i, &clen)));
                 cx += (cw > 0) ? cw : 1;
             }
             wattroff(win, COLOR_PAIR(color) | attr);
