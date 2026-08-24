@@ -1027,8 +1027,12 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
                 }
             }
             if (row.mandatory) { nameAttr |= A_BOLD; valAttr |= A_BOLD; }
-            if (!row.operational && isTimestampAttr(row.name))
+            if (!row.operational && isTimestampAttr(row.name)) {
                 valColor = timestampColor(row.name, row.value);
+                // Recent timestamps render bold green ("light green") so they
+                // stay distinct from the plain green operational values.
+                if (valColor == CP_ATTR_TIME_NEW) valAttr |= A_BOLD;
+            }
         }
 
         bool matchSearch = !searchStr_.empty() && !row.isToggle
