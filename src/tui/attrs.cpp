@@ -91,6 +91,19 @@ unsigned utf8Decode(const std::string &s, size_t i, int *len) {
     return cp;
 }
 
+// Display width of a string (sum of wcwidth per decoded code point).
+int displayWidth(const std::string &s) {
+    int w = 0;
+    size_t i = 0;
+    while (i < s.size()) {
+        int l = 0;
+        int cw = wcwidth(static_cast<wchar_t>(utf8Decode(s, i, &l)));
+        if (cw > 0) w += cw;
+        i += l;
+    }
+    return w;
+}
+
 // Wrap a string into visual lines of at most maxCols display columns,
 // never splitting a multi-byte UTF-8 character.
 std::vector<std::string> wrapDisplay(const std::string &s, int maxCols) {
@@ -977,9 +990,7 @@ static void drawSchemaValue(WINDOW *win, int y, int x, int maxW,
                 cx++;
             } else {
                 mvwaddstr(win, y, cx, val.substr(i, static_cast<size_t>(len)).c_str());
-                int clen = 0;
-                int cw = wcwidth(static_cast<wchar_t>(utf8Decode(val, i, &clen)));
-                cx += (cw > 0) ? cw : 1;
+                cx += displayWidth(val.substr(i, static_cast<size_t>(len)));
             }
             wattroff(win, COLOR_PAIR(color) | attr);
             i += len;
