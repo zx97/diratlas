@@ -91,6 +91,10 @@ bool LDAPConn::connect(const std::string &uri,
     if (rc != LDAP_OPT_SUCCESS) return false;
     diratlas::dbgLog(diratlas::LDAP_DEBUG_CONNS, "connect: protocol v" + std::to_string(ldapVersion));
 
+    // Alias dereferencing policy (-a) — setDeref() may have been called
+    // before connect(), so the stored value is applied to the live handle.
+    ldap_set_option(ld, LDAP_OPT_DEREF, &deref_);
+
     if (debug_) {
         ldap_set_option(ld, LDAP_OPT_DEBUG_LEVEL, &debug_);
     }
@@ -128,10 +132,12 @@ bool LDAPConn::connect(const std::string &uri,
     return true;
 }
 
-/** @brief Set alias dereferencing option on the LDAP handle. */
+/** @brief Set alias dereferencing policy. Applied on the live handle now, or
+ *         stored and applied by connect() if called before the connection. */
 bool LDAPConn::setDeref(int deref) {
+    deref_ = deref;
     if (!ld) return false;
-    return ldap_set_option(ld, LDAP_OPT_DEREF, &deref) == LDAP_OPT_SUCCESS;
+    return ldap_set_option(ld, LDAP_OPT_DEREF, &deref_) == LDAP_OPT_SUCCESS;
 }
 
 /** @brief Initiate StartTLS on the connected session. */

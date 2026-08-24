@@ -184,7 +184,7 @@ public:
     bool addObject(const std::string &dn, const std::map<std::string, std::vector<std::string>> &attrs);
 
     // ── Options ───────────────────────────────────────────
-    /** @brief Set alias dereferencing policy. */
+    /** @brief Set alias dereferencing policy (applied inside connect()). */
     bool setDeref(int deref); // LDAP_DEREF_NEVER/SEARCH/FIND/ALWAYS
     /** @brief Set OpenLDAP debug level. */
     void setDebug(int level) { debug_ = level; }
@@ -266,6 +266,7 @@ private:
     LDAP *ld{nullptr};                     ///< libldap session handle
     bool connected{false};
     int debug_{0};
+    int deref_{LDAP_DEREF_NEVER};          ///< Alias deref policy (applied in connect())
     int ldapVersion{LDAP_VERSION3};
     std::vector<LdapControl> ctrls_;
 };

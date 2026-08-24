@@ -44,6 +44,7 @@ int64_t parseGeneralizedTime(const std::string &val) {
     }
     // Optional fractional part.
     if (i < val.size() && val[i] == '.') {
+        ++i;  // skip the dot, then consume the fraction digits
         while (i < val.size() && std::isdigit(static_cast<unsigned char>(val[i]))) ++i;
     }
     // Optional timezone: 'Z' or +HHMM / -HHMM. Default is UTC.

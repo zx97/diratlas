@@ -114,6 +114,16 @@ static int parseDebugLevel(const char *s) {
     return static_cast<int>(v);
 }
 
+/// @brief Parse an integer CLI value without throwing on garbage.
+///        Invalid input silently falls back to @p fallback (ldapsearch-like).
+static int parseIntSafe(const char *s, int fallback) {
+    if (!s || !*s) return fallback;
+    char *end = nullptr;
+    long v = std::strtol(s, &end, 10);
+    if (end == s || *end != '\0') return fallback;
+    return static_cast<int>(v);
+}
+
 /**
  * @brief Aggregate of all command-line and ldaprc configuration.
  *
@@ -336,18 +346,23 @@ static void printUsage(const char *prog) {
               << "  -h, --help            Print this help\n";
 }
 
-/// @brief Read a file (or stdin via "-") into a string.
-static std::string readFile(const std::string &path) {
+/// @brief Read a file (or stdin via "-") into @p content.
+/// @return true on success; false if the file cannot be opened. An empty
+///         file is a success with empty content (distinct from unreadable).
+static bool readFile(const std::string &path, std::string &content) {
+    content.clear();
     if (path == "-") {
         std::string line;
         std::getline(std::cin, line);
-        return line;
+        content = line;
+        return true;
     }
     std::ifstream f(path);
-    if (!f.is_open()) return "";
+    if (!f.is_open()) return false;
     std::stringstream ss;
     ss << f.rdbuf();
-    return ss.str();
+    content = ss.str();
+    return true;
 }
 
 /// @brief Print an LDIF record line, folding long lines at @p width columns.
@@ -797,15 +812,15 @@ int main(int argc, char **argv) {
                 std::string name = long_options[option_index].name;
                 if (name == "cli") cfg.cli = true;
                 else if (name == "countEntries") cfg.countEntries = true;
-                else if (name == "wrapColumn") cfg.wrapColumn = std::stoi(optarg);
+                else if (name == "wrapColumn") cfg.wrapColumn = parseIntSafe(optarg, 0);
                 else if (name == "nowrap") cfg.wrapColumn = 0;
-                else if (name == "simplePageSize") cfg.simplePageSize = std::stoi(optarg);
+                else if (name == "simplePageSize") cfg.simplePageSize = parseIntSafe(optarg, 0);
                 else if (name == "whoami") cfg.whoami = true;
                 else if (name == "passwd-modify") { cfg.passwdModify = true; if (optarg) cfg.passwdUser = optarg; }
                 else if (name == "passwd-old") cfg.passwdOld = optarg;
                 else if (name == "passwd-new") cfg.passwdNew = optarg;
-                else if (name == "cancel") cfg.cancelMsgid = std::stoi(optarg);
-                else if (name == "abandon") cfg.abandonMsgid = std::stoi(optarg);
+                else if (name == "cancel") cfg.cancelMsgid = parseIntSafe(optarg, -1);
+                else if (name == "abandon") cfg.abandonMsgid = parseIntSafe(optarg, -1);
                 else if (name == "increment") cfg.incrementSpec = optarg;
                 else if (name == "capabilities") cfg.capabilities = optarg ? optarg : "supportedCapabilities";
                 else if (name == "persistent-search") cfg.persistentSearch = true;
@@ -819,9 +834,9 @@ int main(int argc, char **argv) {
                 else if (name == "colors") cfg.colors = true;
                 else if (name == "format") cfg.format = true;
                 else if (name == "expand") cfg.expand = true;
-                else if (name == "limit") cfg.attrLimit = std::stoi(optarg);
+                else if (name == "limit") cfg.attrLimit = parseIntSafe(optarg, 20);
                 else if (name == "timefmt") cfg.timeFormat = optarg;
-                else if (name == "offset") cfg.timeOffset = std::stoi(optarg);
+                else if (name == "offset") cfg.timeOffset = parseIntSafe(optarg, 0);
                 else if (name == "exportdir") cfg.exportDir = optarg;
                 else if (name == "socks") cfg.socksProxy = optarg;
                 break;
@@ -843,10 +858,10 @@ int main(int argc, char **argv) {
                 else if (m == "children") cfg.scope = 3;
                 break;
             }
-            case 'z': cfg.sizelimit = std::stoi(optarg); break;
+            case 'z': cfg.sizelimit = parseIntSafe(optarg, 0); break;
             case 'd': cfg.debug = parseDebugLevel(optarg); break;
             case 'V': printVersion(); return 0;
-            case 'P': cfg.protocolVersion = std::stoi(optarg); break;
+            case 'P': cfg.protocolVersion = parseIntSafe(optarg, 3); break;
             case 'U': cfg.saslAuthcid = optarg; break;
             case 'R': cfg.saslRealm = optarg; break;
             case 'X': cfg.saslAuthzId = optarg; break;
@@ -875,12 +890,15 @@ int main(int argc, char **argv) {
                 else if (key == "TLS_CACERTDIR") cfg.tlsCACertDir = val;
                 else if (key == "TLS_CERT") cfg.tlsCert = val;
                 else if (key == "TLS_KEY") cfg.tlsKey = val;
-                else if (key == "NETTIMEOUT") { try { cfg.networkTimeout = std::stoi(val); } catch (...) {} }
-                else if (key == "SIZELIMIT") { try { cfg.sizelimit = std::stoi(val); } catch (...) {} }
-                else if (key == "TIMELIMIT") { try { cfg.timelimit = std::stoi(val); } catch (...) {} }
+                else if (key == "NETTIMEOUT") cfg.networkTimeout = parseIntSafe(val.c_str(), 0);
+                else if (key == "SIZELIMIT") cfg.sizelimit = parseIntSafe(val.c_str(), 0);
+                else if (key == "TIMELIMIT") cfg.timelimit = parseIntSafe(val.c_str(), 10);
                 else if (key == "LDIF_WRAP") {
                     if (val == "no") cfg.wrapColumn = 0;
-                    else { try { int w = std::stoi(val); if (w > 0) cfg.wrapColumn = w; } catch (...) {} }
+                    else {
+                        int w = parseIntSafe(val.c_str(), 0);
+                        if (w > 0) cfg.wrapColumn = w;
+                    }
                 }
                 else std::cerr << "Warning: unknown -o option: " << s << std::endl;
                 break;
@@ -900,7 +918,7 @@ int main(int argc, char **argv) {
             case 'W': promptPw = true; break;
             case 'y': cfg.passfile = optarg; break;
             case 'b': cfg.base = optarg; cfg.baseSet = true; break;
-            case 'l': cfg.timelimit = std::stoi(optarg); break;
+            case 'l': cfg.timelimit = parseIntSafe(optarg, 10); break;
             case 'Z': cfg.starttls = (cfg.starttls < 2) ? cfg.starttls + 1 : 2; break;
             case 'h': printUsage(argv[0]); return 0;
             default: printUsage(argv[0]); return 1;
@@ -975,7 +993,11 @@ int main(int argc, char **argv) {
         std::getline(std::cin, cfg.password);
     }
     if (!cfg.passfile.empty()) {
-        auto pw = readFile(cfg.passfile);
+        std::string pw;
+        if (!readFile(cfg.passfile, pw)) {
+            std::cerr << "Error: cannot read password file: " << cfg.passfile << std::endl;
+            return 1;
+        }
         if (!pw.empty())
             cfg.password = pw;
     }
@@ -1294,8 +1316,8 @@ int main(int argc, char **argv) {
     if (cfg.cli) {
         std::vector<std::string> filters;
         if (!cfg.filterFile.empty()) {
-            std::string content = readFile(cfg.filterFile);
-            if (content.empty()) {
+            std::string content;
+            if (!readFile(cfg.filterFile, content)) {
                 std::cerr << "Error: cannot read filter file: " << cfg.filterFile << std::endl;
                 return 1;
             }

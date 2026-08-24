@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(diratlas VERSION 2.7.3 LANGUAGES CXX)
+project(diratlas VERSION 2.7.4 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -204,3 +204,30 @@ target_include_directories(test_attrdesc PRIVATE
 target_compile_options(test_attrdesc PRIVATE -Wall -Wextra)
 
 add_test(NAME test_attrdesc COMMAND test_attrdesc)
+
+add_executable(test_bytes
+    tests/test_bytes.cpp
+    src/ldapcore/bytes.cpp
+)
+
+target_include_directories(test_bytes PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_options(test_bytes PRIVATE -Wall -Wextra)
+
+add_test(NAME test_bytes COMMAND test_bytes)
+
+add_executable(test_attrs
+    tests/test_attrs.cpp
+    src/ldapcore/attrs.cpp
+    src/ldapcore/bytes.cpp
+)
+
+target_include_directories(test_attrs PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_options(test_attrs PRIVATE -Wall -Wextra)
+
+add_test(NAME test_attrs COMMAND test_attrs)

@@ -53,3 +53,6 @@ da.tar.xz
 ldap_fix_*
 RFC4512_*
 *.bak
+
+# Internal analysis notes (never publish)
+ANALYSIS.md
