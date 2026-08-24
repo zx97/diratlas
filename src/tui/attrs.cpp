@@ -838,6 +838,7 @@ static bool isOpaqueValueAttr(const std::string &name) {
         "supportedcapabilities", "supportedldapversion", "supportedsaslmechanisms",
         "namingcontexts", "altserver", "vendorname", "vendorversion",
         "monitorcontext", "pwdchangedtime", "pwdaccountlockedtime",
+        "objectclass",
     };
     return s.count(name) > 0;
 }
