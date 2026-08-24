@@ -53,6 +53,7 @@ const ColorTheme themeDefault = {
         /* CP_MENU_ACTIVE       */ {COLOR_BLACK,  COLOR_WHITE},
         /* CP_MENU_ITEM         */ {COLOR_WHITE,  -1},
         /* CP_ATTR_REPL         */ {COLOR_MAGENTA, -1},
+        /* CP_ATTR_OC           */ {208, -1},
     }
 };
 
@@ -69,7 +70,7 @@ const ColorTheme themeMonochrome = {
         {COLOR_BLACK, COLOR_WHITE}, {COLOR_BLACK, COLOR_WHITE},
         {COLOR_WHITE, -1}, {COLOR_WHITE, -1},
         {COLOR_WHITE, -1}, {COLOR_BLACK, COLOR_WHITE}, {COLOR_WHITE, -1},
-        {COLOR_WHITE, -1},
+        {COLOR_WHITE, -1}, {COLOR_WHITE, -1},
     }
 };
 
@@ -87,7 +88,7 @@ const ColorTheme themeHighContrast = {
         {COLOR_BLACK,  COLOR_WHITE},
         {COLOR_YELLOW, -1}, {COLOR_YELLOW, -1},
         {COLOR_YELLOW, -1}, {COLOR_BLACK,  COLOR_WHITE}, {COLOR_WHITE, -1},
-        {COLOR_MAGENTA, -1},
+        {COLOR_MAGENTA, -1}, {208, -1},
     }
 };
 
@@ -105,7 +106,7 @@ const ColorTheme themeLight = {
         {COLOR_BLACK, COLOR_WHITE},
         {COLOR_BLACK, -1}, {COLOR_BLACK, -1},
         {COLOR_BLACK, -1}, {COLOR_BLUE,  COLOR_WHITE}, {COLOR_BLACK, -1},
-        {COLOR_BLUE,  -1},
+        {COLOR_BLUE,  -1}, {208, -1},
     }
 };
 
@@ -123,7 +124,7 @@ const ColorTheme themeSolarized = {
         {COLOR_BLACK,  COLOR_WHITE},
         {COLOR_CYAN,   -1}, {COLOR_CYAN,   -1},
         {COLOR_CYAN,   -1}, {COLOR_BLACK,  COLOR_CYAN}, {COLOR_WHITE, -1},
-        {COLOR_MAGENTA, -1},
+        {COLOR_MAGENTA, -1}, {208, -1},
     }
 };
 
@@ -141,7 +142,7 @@ const ColorTheme themeGruvbox = {
         {COLOR_BLACK,  COLOR_WHITE},
         {COLOR_YELLOW, -1}, {COLOR_YELLOW, -1},
         {COLOR_YELLOW, -1}, {COLOR_BLACK,  COLOR_YELLOW}, {COLOR_WHITE, -1},
-        {COLOR_MAGENTA, -1},
+        {COLOR_MAGENTA, -1}, {208, -1},
     }
 };
 
@@ -159,7 +160,7 @@ const ColorTheme themeLinux = {
         {COLOR_BLACK, COLOR_WHITE},
         {COLOR_WHITE, -1}, {COLOR_WHITE, -1},
         {COLOR_WHITE, -1}, {COLOR_BLACK, COLOR_WHITE}, {COLOR_WHITE, -1},
-        {COLOR_MAGENTA, -1},
+        {COLOR_MAGENTA, -1}, {208, -1},
     }
 };
 
@@ -660,7 +661,7 @@ void App::draw() {
 }
 
 void App::applyTheme(const ColorTheme &t) {
-    for (int i = 1; i <= CP_ATTR_REPL; i++) {
+    for (int i = 1; i <= CP_ATTR_OC; i++) {
         int fg = t.pairs[i][0];
         int bg = t.pairs[i][1];
         if (fg < 0 && bg < 0)

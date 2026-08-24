@@ -1092,6 +1092,8 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
                 // stay distinct from the plain green operational values.
                 if (valColor == CP_ATTR_TIME_NEW) valAttr |= A_BOLD;
             }
+            // objectClass rows (explicit + implicit SUP chain) share one colour.
+            if (row.attrName == "objectClass") valColor = CP_ATTR_OC;
         }
 
         bool matchSearch = !searchStr_.empty() && !row.isToggle
