@@ -28,6 +28,7 @@ namespace diratlas::tui {
 const ColorTheme themeDefault = {
     "Default",
     {
+        {0, 0},                                 // [0] unused (ncurses pair 0)
         /* CP_HEADER            */ {COLOR_WHITE, COLOR_BLUE},
         /* CP_HEADER_BG         */ {COLOR_BLACK, COLOR_WHITE},
         /* CP_STATUS_OK         */ {COLOR_GREEN,  -1},
@@ -58,6 +59,7 @@ const ColorTheme themeDefault = {
 const ColorTheme themeMonochrome = {
     "Monochrome",
     {
+        {0, 0},
         {COLOR_WHITE, -1}, {COLOR_WHITE, -1}, {COLOR_WHITE, -1},
         {COLOR_WHITE, -1}, {COLOR_WHITE, -1},
         {COLOR_WHITE, -1}, {COLOR_WHITE, -1}, {COLOR_WHITE, -1},
@@ -74,6 +76,7 @@ const ColorTheme themeMonochrome = {
 const ColorTheme themeHighContrast = {
     "High Contrast",
     {
+        {0, 0},
         {COLOR_YELLOW, -1}, {COLOR_WHITE, COLOR_BLUE},
         {COLOR_GREEN,  -1}, {COLOR_YELLOW, -1}, {COLOR_RED,    -1},
         {COLOR_WHITE,  -1}, {COLOR_RED,    -1}, {COLOR_YELLOW, -1},
@@ -91,6 +94,7 @@ const ColorTheme themeHighContrast = {
 const ColorTheme themeLight = {
     "Light",
     {
+        {0, 0},
         {COLOR_WHITE, COLOR_BLUE}, {COLOR_BLACK, COLOR_WHITE},
         {COLOR_BLACK, -1}, {COLOR_BLACK, -1}, {COLOR_BLACK, -1},
         {COLOR_BLACK, -1}, {COLOR_RED,   -1}, {COLOR_BLACK, -1},
@@ -108,6 +112,7 @@ const ColorTheme themeLight = {
 const ColorTheme themeSolarized = {
     "Solarized",
     {
+        {0, 0},
         {COLOR_CYAN,   -1}, {COLOR_WHITE, COLOR_BLUE},
         {COLOR_GREEN,  -1}, {COLOR_YELLOW, -1}, {COLOR_RED,    -1},
         {COLOR_WHITE,  -1}, {COLOR_RED,    -1}, {COLOR_YELLOW, -1},
@@ -125,6 +130,7 @@ const ColorTheme themeSolarized = {
 const ColorTheme themeGruvbox = {
     "Gruvbox",
     {
+        {0, 0},
         {COLOR_YELLOW, -1}, {COLOR_BLACK, COLOR_WHITE},
         {COLOR_GREEN,  -1}, {COLOR_YELLOW, -1}, {COLOR_RED,    -1},
         {COLOR_WHITE,  -1}, {COLOR_RED,    -1}, {COLOR_YELLOW, -1},
@@ -142,6 +148,7 @@ const ColorTheme themeGruvbox = {
 const ColorTheme themeLinux = {
     "Linux Console",
     {
+        {0, 0},
         {COLOR_WHITE, COLOR_BLUE}, {COLOR_WHITE, COLOR_BLUE},
         {COLOR_GREEN, -1}, {COLOR_YELLOW, -1}, {COLOR_RED, -1},
         {COLOR_WHITE, -1}, {COLOR_RED,  -1}, {COLOR_YELLOW, -1},

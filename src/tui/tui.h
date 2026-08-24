@@ -41,10 +41,11 @@ enum ColorPair {
     CP_ATTR_REPL      = 24,
 };
 
-// Color theme: maps each ColorPair to foreground/background
+// Color theme: maps each ColorPair to foreground/background.
+// Index 0 is unused (ncurses reserves pair 0); pairs 1..CP_ATTR_REPL are used.
 struct ColorTheme {
     std::string name;
-    int pairs[24][2]; // [colorpair][fg, bg], -1 = default
+    int pairs[25][2]; // [colorpair][fg, bg], -1 = default
 };
 
 extern const ColorTheme themeDefault;
