@@ -19,6 +19,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cctype>
+#include <cwchar>
 
 namespace diratlas::tui {
 
@@ -67,6 +68,52 @@ static std::vector<std::string> mergeAdEntries(const std::vector<diratlas::ad::A
 static const std::string &displayOf(const AttrRow &row) {
     return row.display.empty() ? row.value : row.display;
 }
+
+namespace {
+// Decode the UTF-8 code point starting at s[i]. Returns the code point and
+// stores its byte length in *len (1 + raw byte on invalid input).
+unsigned utf8Decode(const std::string &s, size_t i, int *len) {
+    unsigned char c = static_cast<unsigned char>(s[i]);
+    if (c < 0x80) { *len = 1; return c; }
+    int n = 0;
+    unsigned cp = 0;
+    if ((c & 0xE0) == 0xC0)      { n = 2; cp = c & 0x1F; }
+    else if ((c & 0xF0) == 0xE0) { n = 3; cp = c & 0x0F; }
+    else if ((c & 0xF8) == 0xF0) { n = 4; cp = c & 0x07; }
+    else { *len = 1; return c; }
+    if (i + n > s.size()) { *len = 1; return c; }
+    for (int k = 1; k < n; k++) {
+        unsigned char cc = static_cast<unsigned char>(s[i + k]);
+        if ((cc & 0xC0) != 0x80) { *len = 1; return c; }
+        cp = (cp << 6) | (cc & 0x3F);
+    }
+    *len = n;
+    return cp;
+}
+
+// Wrap a string into visual lines of at most maxCols display columns,
+// never splitting a multi-byte UTF-8 character.
+std::vector<std::string> wrapDisplay(const std::string &s, int maxCols) {
+    std::vector<std::string> out;
+    if (s.empty()) { out.push_back(""); return out; }
+    size_t i = 0;
+    while (i < s.size()) {
+        std::string line;
+        int cols = 0;
+        while (i < s.size()) {
+            int len = 0;
+            unsigned cp = utf8Decode(s, i, &len);
+            int cw = wcwidth(static_cast<wchar_t>(cp));
+            if (cw > 0 && cols + cw > maxCols && cols > 0) break;
+            line.append(s, i, static_cast<size_t>(len));
+            if (cw > 0) cols += cw;
+            i += len;
+        }
+        out.push_back(line);
+    }
+    return out;
+}
+} // namespace
 
 /** @brief Check if an attribute name is a recognised LDAP timestamp field. */
 static bool isTimestampAttr(const std::string &name) {
@@ -827,8 +874,15 @@ static void drawSchemaValue(WINDOW *win, int y, int x, int maxW,
         attr_t attr = defaultAttr;
         int len = 1;
 
+        // Multi-byte UTF-8 characters are emitted whole so non-ASCII values
+        // (e.g. description;lang-* in Cyrillic/Greek) are never split.
+        if (static_cast<unsigned char>(val[i]) >= 0x80) {
+            int ulen = 0;
+            utf8Decode(val, i, &ulen);
+            len = ulen;
+        }
         // Parentheses, curly braces, square brackets
-        if (val[i] == '(' || val[i] == ')' ||
+        else if (val[i] == '(' || val[i] == ')' ||
             val[i] == '{' || val[i] == '}' ||
             val[i] == '[' || val[i] == ']') {
             color = CP_ATTR_TIME_VERY_OLD;
@@ -908,8 +962,14 @@ static void drawSchemaValue(WINDOW *win, int y, int x, int maxW,
 
         if (len > 0) {
             wattron(win, COLOR_PAIR(color) | attr);
-            for (int j = 0; j < len && cx < x + maxW; j++, cx++)
-                mvwaddch(win, y, cx, val[i + j]);
+            if (len == 1) {
+                mvwaddch(win, y, cx, val[i]);
+                cx++;
+            } else {
+                mvwaddstr(win, y, cx, val.substr(i, static_cast<size_t>(len)).c_str());
+                int cw = wcwidth(static_cast<wchar_t>(utf8Decode(val, i, &len)));
+                cx += (cw > 0) ? cw : 1;
+            }
             wattroff(win, COLOR_PAIR(color) | attr);
             i += len;
         } else {
@@ -969,10 +1029,8 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
         int v = 0;
         for (const auto &r : rows_) {
             int lines = 1;
-            if (!r.isToggle && valW > 10) {
-                int needed = (static_cast<int>(displayOf(r).size()) + valW - 1) / valW;
-                if (needed > 1) lines = needed;
-            }
+            if (!r.isToggle && valW > 10)
+                lines = static_cast<int>(wrapDisplay(displayOf(r), valW).size());
             vinfo.push_back({v, lines});
             v += lines;
         }
@@ -1071,13 +1129,8 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
 
             // Value segment for this wrapped line
             const std::string &showText = displayOf(row);
-            int segOff = L * valW;
-            std::string seg;
-            if (segOff < static_cast<int>(showText.size())) {
-                int segLen = static_cast<int>(showText.size()) - segOff;
-                if (segLen > valW) segLen = valW;
-                seg = showText.substr(segOff, segLen);
-            }
+            auto segs = wrapDisplay(showText, valW);
+            std::string seg = (L < static_cast<int>(segs.size())) ? segs[L] : std::string();
 
             if (useSyntaxHL && !seg.empty()) {
                 drawSchemaValue(win, y, nameW + 2, valW, seg, valColor, valAttr);
