@@ -302,6 +302,8 @@ bool App::init(LDAPConn &conn, const std::string &initFilter,
 
     attrs_ = std::make_unique<AttrsWidget>();
     attrs_->setFlavor(conn_->flavor);
+    attrSchema_ = loadAttrSchema(*conn_);
+    attrs_->setAttrSchema(&attrSchema_);
 
     // If a CLI filter was provided, execute search immediately
     if (!initFilter.empty()) {

@@ -99,6 +99,9 @@ struct AttrSchemaInfo {
     bool singleValue(const std::string &lowerType) const;
     /// Whether the attribute is NO-USER-MODIFICATION (default: false).
     bool noUserModification(const std::string &lowerType) const;
+    /// Whether the attribute is operational per RFC 4512 (USAGE
+    /// directoryOperation / distributedOperation / dSAOperation).
+    bool operational(const std::string &lowerType) const;
 };
 /** @brief Load attributeTypes from the server subschema. */
 AttrSchemaInfo loadAttrSchema(LDAPConn &conn);
@@ -139,6 +142,8 @@ public:
 
     /** @brief Set the server flavour; gates AD-specific attribute formatting. */
     void setFlavor(LDAPFlavor flavor) { flavor_ = flavor; }
+    /** @brief Set the attributeTypes schema for schema-driven decisions. */
+    void setAttrSchema(const AttrSchemaInfo *schema) { attrSchema_ = schema; }
 
     /// Per-attribute collapse state (true = collapsed, showing "[+N more]")
     std::map<std::string, bool> collapsed_;
@@ -174,6 +179,7 @@ private:
     std::string toggleAttr_;            ///< Attribute name saved for toggle position restore
     int toggleOffset_{0};               ///< Value offset within the attribute for position restore
     LDAPFlavor flavor_{LDAPFlavor::MicrosoftAD}; ///< Server flavour; gates AD-specific formatting
+    const AttrSchemaInfo *attrSchema_{nullptr}; ///< attributeTypes schema (owned by App)
 };
 
 } // namespace diratlas::tui

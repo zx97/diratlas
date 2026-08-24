@@ -480,7 +480,8 @@ void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mand
         auto it = entry.attributes.find(attrName);
         if (it == entry.attributes.end()) continue;
 
-        bool op = isOperationalAttr(attrName);
+        bool op = isOperationalAttr(attrName) ||
+                  (attrSchema_ && attrSchema_->operational(lowerName(attrName)));
         bool mand = mandatory.count(attrName) > 0;
 
         const std::string lower = lowerName(attrName);
@@ -1398,9 +1399,18 @@ bool AttrSchemaInfo::singleValue(const std::string &lowerType) const {
 
 bool AttrSchemaInfo::noUserModification(const std::string &lowerType) const {
     auto it = defs.find(lowerType);
-    if (it == defs.end()) return false;
+    if (it == defs.end()) return false;  // unknown -> assume user-modifiable (prudent)
     return it->second.find("NO-USER-MODIFICATION") != std::string::npos ||
            it->second.find("NO-USER-MODIFICATION ") != std::string::npos;
+}
+
+bool AttrSchemaInfo::operational(const std::string &lowerType) const {
+    auto it = defs.find(lowerType);
+    if (it == defs.end()) return false;
+    const std::string &d = it->second;
+    return d.find("USAGE directoryOperation") != std::string::npos ||
+           d.find("USAGE distributedOperation") != std::string::npos ||
+           d.find("USAGE dSAOperation") != std::string::npos;
 }
 
 AttrSchemaInfo loadAttrSchema(LDAPConn &conn) {
