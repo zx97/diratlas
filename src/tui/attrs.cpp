@@ -777,6 +777,23 @@ static std::string maybeDecodeBase64(const std::string &val) {
     return dec;
 }
 
+/** @brief True for attributes whose values are scalar/opaque data (UUIDs,
+ * timestamps, DNs, server info) where syntax highlighting is meaningless and
+ * would split the value into misleading colour segments. */
+static bool isOpaqueValueAttr(const std::string &name) {
+    static const std::set<std::string> s = {
+        "entryuuid", "entrycsn", "contextcsn", "entrydn",
+        "createtimestamp", "modifytimestamp",
+        "creatorsname", "modifiersname",
+        "subschemasubentry", "hassubordinates", "numsubordinates",
+        "supportedcontrol", "supportedextension", "supportedfeatures",
+        "supportedcapabilities", "supportedldapversion", "supportedsaslmechanisms",
+        "namingcontexts", "altserver", "vendorname", "vendorversion",
+        "monitorcontext", "pwdchangedtime", "pwdaccountlockedtime",
+    };
+    return s.count(name) > 0;
+}
+
 /**
  * @brief Tokenise and syntax-highlight a schema definition value.
  *
@@ -1016,7 +1033,7 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
         bool matchSearch = !searchStr_.empty() && !row.isToggle
             && (displayOf(row).find(searchStr_) != std::string::npos
              || row.name.find(searchStr_) != std::string::npos);
-        bool useSyntaxHL = !row.isToggle && !matchSearch;
+        bool useSyntaxHL = !row.isToggle && !matchSearch && !isOpaqueValueAttr(lowerName(row.name));
 
         for (int L = 0; L < nlines && y < maxY; L++) {
             int v = vinfo[i].vstart + L;
