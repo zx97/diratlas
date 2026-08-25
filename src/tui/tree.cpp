@@ -220,9 +220,10 @@ TreeNode *TreeWidget::loadChildren(TreeNode *node) {
             child->depth = node->depth + 1;
             // Verify the context is accessible
             std::vector<LDAPEntry> verify;
-            child->hasChildren = conn_.search(ctx, LDAP_SCOPE_BASE,
-                                               "(objectClass=*)", {"dn"}, false, verify);
-            if (child->hasChildren) {
+            bool accessible = conn_.search(ctx, LDAP_SCOPE_BASE,
+                                           "(objectClass=*)", {"dn"}, false, verify);
+            if (accessible) {
+                child->hasChildren = true;
                 // Add emoji based on context type
                 if (ctx == rootDN_ && !rootDN_.empty())
                     child->name = "\U0001F4CC " + ctx;    // clipboard for custom base
@@ -234,8 +235,14 @@ TreeNode *TreeWidget::loadChildren(TreeNode *node) {
                     child->name = "\U0001F4D6 " + ctx;    // book
                 else
                     child->name = "\U0001F310 " + ctx;    // globe
-                node->children.push_back(std::move(child));
+            } else {
+                // Context exposed but not readable with this bind (e.g. AD
+                // requires authentication for the suffixes): keep the node
+                // visible so the exposed suffixes are not hidden.
+                child->hasChildren = false;
+                child->loadError = conn_.lastError;
             }
+            node->children.push_back(std::move(child));
         }
         node->hasChildren = !node->children.empty();
         return node;
