@@ -319,18 +319,26 @@ static std::string parseSUP(const std::string &ocDef) {
     return ocDef.substr(p, end - p);
 }
 
+/// @brief Extract the NAME field from a schema definition (objectClass or
+/// attributeType). Handles NAME 'x', NAME "x" and multi-valued
+/// NAME ( 'x' 'y' ... ) — the first name is returned (RFC 4512).
+static std::string parseSchemaName(const std::string &def) {
+    auto namePos = def.find(" NAME ");
+    if (namePos == std::string::npos) return "";
+    namePos += 6;
+    auto q = def.find_first_of("'\"", namePos);
+    if (q == std::string::npos) return "";
+    char quote = def[q];
+    auto end = def.find(quote, q + 1);
+    if (end == std::string::npos) return "";
+    return def.substr(q + 1, end - q - 1);
+}
+
 /// @brief Extract the NAME field from an objectClass schema definition.
+/// Handles NAME 'x', NAME "x" and multi-valued NAME ( 'x' 'y' ... ) — the
+/// first name is returned (RFC 4512 allows several names for one class).
 static std::string parseOCName(const std::string &ocDef) {
-    auto namePos = ocDef.find(" NAME '");
-    if (namePos == std::string::npos) {
-        namePos = ocDef.find(" NAME \"");
-        if (namePos == std::string::npos) return "";
-    }
-    namePos += 7; // skip " NAME '"
-    auto nameEnd = ocDef.find('\'', namePos);
-    if (nameEnd == std::string::npos) nameEnd = ocDef.find('"', namePos);
-    if (nameEnd == std::string::npos) return "";
-    return ocDef.substr(namePos, nameEnd - namePos);
+    return parseSchemaName(ocDef);
 }
 
 std::vector<std::string> listObjectClasses(LDAPConn &conn) {
@@ -1539,18 +1547,8 @@ AttrSchemaInfo loadAttrSchema(LDAPConn &conn) {
     auto subschema = conn.searchOne(subschemaDN, "(objectClass=*)", {"attributeTypes"}, false);
     auto allDefs = subschema.getAttrs("attributeTypes");
     for (const auto &def : allDefs) {
-        // Extract the NAME 'x' (or NAME "x") — first occurrence after the OID.
-        size_t namePos = def.find(" NAME '");
-        char quote = '\'';
-        if (namePos == std::string::npos) {
-            namePos = def.find(" NAME \"");
-            quote = '"';
-        }
-        if (namePos == std::string::npos) continue;
-        namePos += 7;  // skip " NAME '"
-        size_t nameEnd = def.find(quote, namePos);
-        if (nameEnd == std::string::npos) continue;
-        std::string name = def.substr(namePos, nameEnd - namePos);
+        // NAME may be single- or multi-valued: NAME 'x', NAME ( 'x' 'y' ... )
+        std::string name = parseSchemaName(def);
         if (name.empty()) continue;
         std::string lower;
         for (char c : name)
