@@ -126,6 +126,53 @@ std::vector<std::string> wrapDisplay(const std::string &s, int maxCols) {
     }
     return out;
 }
+
+// Short human descriptions for well-known RootDSE supported* OIDs /
+// mechanism names, appended after the raw value in the attribute panel.
+const std::map<std::string, const char*> kRootDseOidDesc = {
+    // LDAP controls (RFC 4511/4525/4527/4528/2696/3672/4533/3296/4370...)
+    {"1.2.840.113556.1.4.319", "Paged Results (RFC 2696)"},
+    {"1.2.840.113556.1.4.805", "Tree Delete (AD)"},
+    {"1.2.840.113556.1.4.1339", "DirSync (AD)"},
+    {"1.2.840.113556.1.4.1340", "DirSync (AD)"},
+    {"1.3.6.1.1.12", "Assertion (RFC 4528)"},
+    {"1.3.6.1.1.13.1", "Pre-Read (RFC 4527)"},
+    {"1.3.6.1.1.13.2", "Post-Read (RFC 4527)"},
+    {"1.3.6.1.1.22", "Don't Use Copy (RFC 6171)"},
+    {"1.3.6.1.4.1.4203.1.9.1.1", "Sync Request (RFC 4533)"},
+    {"1.3.6.1.4.1.4203.1.10.1", "Subentries (RFC 3672)"},
+    {"1.3.6.1.4.1.42.2.27.8.5.1", "Password Policy (ppolicy)"},
+    {"1.3.6.1.4.1.42.2.27.9.5.8", "Password Policy (ppolicy)"},
+    {"2.16.840.1.113730.3.4.2", "ManageDsaIT (RFC 3296)"},
+    {"2.16.840.1.113730.3.4.18", "Proxy Authorization (RFC 4370)"},
+    // Extended operations
+    {"1.3.6.1.4.1.1466.20037", "StartTLS (RFC 4511)"},
+    {"1.3.6.1.4.1.4203.1.11.1", "Password Modify (RFC 3062)"},
+    {"1.3.6.1.4.1.4203.1.11.3", "Who am I (RFC 4532)"},
+    {"1.3.6.1.1.8", "Cancel (RFC 3909)"},
+    // Features / capabilities
+    {"1.3.6.1.1.14", "Modify-Increment (RFC 4525)"},
+    {"1.3.6.1.4.1.4203.1.5.1", "All Operational Attrs (RFC 3673)"},
+    {"1.3.6.1.4.1.4203.1.5.2", "True/False Filters (RFC 4526)"},
+    {"1.3.6.1.4.1.4203.1.5.3", "Language Tag Options (RFC 3866)"},
+    {"1.3.6.1.4.1.4203.1.5.4", "Language Range Options (RFC 3866)"},
+    // SASL mechanism names
+    {"GSSAPI", "Kerberos"},
+    {"EXTERNAL", "TLS client cert"},
+    {"DIGEST-MD5", "HTTP Digest"},
+    {"CRAM-MD5", "CRAM-MD5"},
+    {"SCRAM-SHA-1", "SCRAM"},
+    {"SCRAM-SHA-256", "SCRAM"},
+    {"PLAIN", "Plain text"},
+};
+
+// Return " (description)" when value is a known supported* OID/mechanism.
+std::string rootDseValueDesc(const std::string &attrName, const std::string &value) {
+    if (attrName.rfind("supported", 0) != 0) return "";
+    auto it = kRootDseOidDesc.find(value);
+    if (it == kRootDseOidDesc.end()) return "";
+    return std::string("  (") + it->second + ")";
+}
 } // namespace
 
 /** @brief Check if an attribute name is a recognised LDAP timestamp field. */
@@ -572,6 +619,13 @@ void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mand
             auto gen = diratlas::ldapcore::formatAttribute(baseType, it->second, byteVals, kTuiTimeFormat);
             for (const auto &g : gen)
                 disp.push_back(g.formatted);
+        }
+
+        // RootDSE supported* attributes: append a short human description
+        // for known OIDs / SASL mechanisms.
+        if (lower.rfind("supported", 0) == 0) {
+            for (size_t vi = 0; vi < disp.size() && vi < it->second.size(); ++vi)
+                disp[vi] += rootDseValueDesc(lower, it->second[vi]);
         }
 
         for (size_t vi = 0; vi < it->second.size(); ++vi) {
