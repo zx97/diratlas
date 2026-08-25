@@ -622,10 +622,17 @@ void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mand
         }
 
         // RootDSE supported* attributes: append a short human description
-        // for known OIDs / SASL mechanisms.
+        // for known OIDs / SASL mechanisms (rendered in a distinct colour).
+        std::vector<size_t> noteOffsets;
         if (lower.rfind("supported", 0) == 0) {
-            for (size_t vi = 0; vi < disp.size() && vi < it->second.size(); ++vi)
-                disp[vi] += rootDseValueDesc(lower, it->second[vi]);
+            noteOffsets.resize(disp.size(), std::string::npos);
+            for (size_t vi = 0; vi < disp.size() && vi < it->second.size(); ++vi) {
+                std::string d = rootDseValueDesc(lower, it->second[vi]);
+                if (!d.empty()) {
+                    noteOffsets[vi] = disp[vi].size();
+                    disp[vi] += d;
+                }
+            }
         }
 
         for (size_t vi = 0; vi < it->second.size(); ++vi) {
@@ -635,6 +642,8 @@ void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mand
             row.operational = op;
             row.mandatory = mand;
             row.attrName = attrName;
+            if (vi < noteOffsets.size())
+                row.noteOffset = noteOffsets[vi];
 
             // Media attributes keep a compact label instead of the raw binary
             std::string showText;
@@ -1210,8 +1219,31 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
             auto segs = wrapDisplay(showText, valW);
             std::string seg = (L < static_cast<int>(segs.size())) ? segs[L] : std::string();
 
+            // Byte offset of this segment inside showText (segments are
+            // consecutive substrings of showText).
+            size_t segOff = 0;
+            for (int k = 0; k < L && k < static_cast<int>(segs.size()); k++)
+                segOff += segs[k].size();
+            size_t noteOff = row.noteOffset;
+
             if (useSyntaxHL && !seg.empty()) {
                 drawSchemaValue(win, y, nameW + 2, valW, seg, valColor, valAttr);
+            } else if (noteOff != std::string::npos && !seg.empty() && segOff + seg.size() > noteOff) {
+                // The value carries an annotated note (e.g. supported* OID
+                // description): render the note in a distinct colour.
+                size_t cut = (noteOff > segOff) ? noteOff - segOff : 0;
+                std::string vpart = (cut < seg.size()) ? seg.substr(0, cut) : seg;
+                std::string npart = (cut < seg.size()) ? seg.substr(cut) : "";
+                if (!vpart.empty()) {
+                    wattron(win, COLOR_PAIR(valColor) | valAttr);
+                    mvwaddstr(win, y, nameW + 2, vpart.c_str());
+                    wattroff(win, COLOR_PAIR(valColor) | valAttr);
+                }
+                if (!npart.empty()) {
+                    wattron(win, COLOR_PAIR(CP_ATTR_TIME_OLD) | A_NORMAL);
+                    mvwaddstr(win, y, nameW + 2 + displayWidth(vpart), npart.c_str());
+                    wattroff(win, COLOR_PAIR(CP_ATTR_TIME_OLD) | A_NORMAL);
+                }
             } else {
                 if (matchSearch) { valColor = CP_STATUS_OK; valAttr |= A_BOLD; }
                 wattron(win, COLOR_PAIR(valColor) | valAttr);

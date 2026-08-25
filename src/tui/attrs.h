@@ -29,6 +29,7 @@ struct AttrRow {
     std::string name;              ///< Attribute name
     std::string value;             ///< Raw attribute value (used for editing and yank)
     std::string display;           ///< Optional formatted text shown instead of @p value
+    size_t noteOffset{std::string::npos}; ///< Byte offset in @p display where the annotated note starts
     bool operational{false};       ///< True for server-generated operational attributes
     bool mandatory{false};         ///< True if the attribute is MUST per schema
     bool isToggle{false};          ///< True for "[+N more]" / "[hide]" toggle rows
