@@ -12,8 +12,46 @@
 #include <ncurses.h>
 #include <algorithm>
 #include <functional>
+#include <cwchar>
 
 namespace {
+
+// Decode the UTF-8 code point starting at s[i]. Returns the code point and
+// stores its byte length in *len (1 + raw byte on invalid input).
+unsigned utf8DecodeTree(const std::string &s, size_t i, int *len) {
+    unsigned char c = static_cast<unsigned char>(s[i]);
+    if (c < 0x80) { *len = 1; return c; }
+    int n = 0;
+    unsigned cp = 0;
+    if ((c & 0xE0) == 0xC0)      { n = 2; cp = c & 0x1F; }
+    else if ((c & 0xF0) == 0xE0) { n = 3; cp = c & 0x0F; }
+    else if ((c & 0xF8) == 0xF0) { n = 4; cp = c & 0x07; }
+    else { *len = 1; return c; }
+    if (i + n > s.size()) { *len = 1; return c; }
+    for (int k = 1; k < n; k++) {
+        unsigned char cc = static_cast<unsigned char>(s[i + k]);
+        if ((cc & 0xC0) != 0x80) { *len = 1; return c; }
+        cp = (cp << 6) | (cc & 0x3F);
+    }
+    *len = n;
+    return cp;
+}
+
+// Truncate s to at most maxCols display columns without splitting a UTF-8
+// character (node names carry emoji, which are 4-byte code points).
+std::string utf8Truncate(const std::string &s, int maxCols) {
+    if (maxCols <= 0) return "";
+    size_t i = 0;
+    int cols = 0;
+    while (i < s.size()) {
+        int len = 0;
+        int cw = wcwidth(static_cast<wchar_t>(utf8DecodeTree(s, i, &len)));
+        if (cw > 0 && cols + cw > maxCols) break;
+        i += static_cast<size_t>(len);
+        if (cw > 0) cols += cw;
+    }
+    return s.substr(0, i);
+}
 
 /**
  * @brief Choose an emoji for an LDAP entry based on its objectClass or DN pattern.
@@ -416,7 +454,7 @@ void TreeWidget::draw(WINDOW *win, bool focused) {
             line += " " + node->name;
             int avail = maxX - 1;
             if (static_cast<int>(line.size()) > avail)
-                line = line.substr(0, avail);
+                line = utf8Truncate(line, avail);
             if (indent + static_cast<int>(line.size()) < maxX)
                 mvwaddstr(win, y, indent, line.c_str());
         }
