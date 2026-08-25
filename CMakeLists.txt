@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(diratlas VERSION 2.8.12 LANGUAGES CXX)
+project(diratlas VERSION 2.8.13 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -114,6 +114,7 @@ add_executable(diratlas
     src/ldapcore/attrdesc.cpp
     src/ldapcore/bytes.cpp
     src/ldapcore/dn.cpp
+    src/ldapcore/utf8.cpp
     src/ad/flags.cpp
     src/ad/format.cpp
     src/ad/guid.cpp
@@ -231,3 +232,16 @@ target_include_directories(test_attrs PRIVATE
 target_compile_options(test_attrs PRIVATE -Wall -Wextra)
 
 add_test(NAME test_attrs COMMAND test_attrs)
+
+add_executable(test_utf8
+    tests/test_utf8.cpp
+    src/ldapcore/utf8.cpp
+)
+
+target_include_directories(test_utf8 PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_options(test_utf8 PRIVATE -Wall -Wextra)
+
+add_test(NAME test_utf8 COMMAND test_utf8)

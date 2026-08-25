@@ -11,6 +11,7 @@
 #include "../ldapcore/attrs.h"
 #include "../ldapcore/attrdesc.h"
 #include "../ldapcore/bytes.h"
+#include "../ldapcore/utf8.h"
 #include "../ad/format.h"
 #include <ncurses.h>
 #include <ctime>
@@ -70,62 +71,10 @@ static const std::string &displayOf(const AttrRow &row) {
 }
 
 namespace {
-// Decode the UTF-8 code point starting at s[i]. Returns the code point and
-// stores its byte length in *len (1 + raw byte on invalid input).
-unsigned utf8Decode(const std::string &s, size_t i, int *len) {
-    unsigned char c = static_cast<unsigned char>(s[i]);
-    if (c < 0x80) { *len = 1; return c; }
-    int n = 0;
-    unsigned cp = 0;
-    if ((c & 0xE0) == 0xC0)      { n = 2; cp = c & 0x1F; }
-    else if ((c & 0xF0) == 0xE0) { n = 3; cp = c & 0x0F; }
-    else if ((c & 0xF8) == 0xF0) { n = 4; cp = c & 0x07; }
-    else { *len = 1; return c; }
-    if (i + n > s.size()) { *len = 1; return c; }
-    for (int k = 1; k < n; k++) {
-        unsigned char cc = static_cast<unsigned char>(s[i + k]);
-        if ((cc & 0xC0) != 0x80) { *len = 1; return c; }
-        cp = (cp << 6) | (cc & 0x3F);
-    }
-    *len = n;
-    return cp;
-}
-
-// Display width of a string (sum of wcwidth per decoded code point).
-int displayWidth(const std::string &s) {
-    int w = 0;
-    size_t i = 0;
-    while (i < s.size()) {
-        int l = 0;
-        int cw = wcwidth(static_cast<wchar_t>(utf8Decode(s, i, &l)));
-        if (cw > 0) w += cw;
-        i += l;
-    }
-    return w;
-}
-
-// Wrap a string into visual lines of at most maxCols display columns,
-// never splitting a multi-byte UTF-8 character.
-std::vector<std::string> wrapDisplay(const std::string &s, int maxCols) {
-    std::vector<std::string> out;
-    if (s.empty()) { out.push_back(""); return out; }
-    size_t i = 0;
-    while (i < s.size()) {
-        std::string line;
-        int cols = 0;
-        while (i < s.size()) {
-            int len = 0;
-            unsigned cp = utf8Decode(s, i, &len);
-            int cw = wcwidth(static_cast<wchar_t>(cp));
-            if (cw > 0 && cols + cw > maxCols && cols > 0) break;
-            line.append(s, i, static_cast<size_t>(len));
-            if (cw > 0) cols += cw;
-            i += len;
-        }
-        out.push_back(line);
-    }
-    return out;
-}
+using diratlas::ldapcore::utf8Decode;
+using diratlas::ldapcore::utf8Truncate;
+using diratlas::ldapcore::utf8Width;
+using diratlas::ldapcore::utf8Wrap;
 
 // Short human descriptions for well-known RootDSE supported* OIDs /
 // mechanism names, appended after the raw value in the attribute panel.
@@ -1053,7 +1002,7 @@ static void drawSchemaValue(WINDOW *win, int y, int x, int maxW,
                 cx++;
             } else {
                 mvwaddstr(win, y, cx, val.substr(i, static_cast<size_t>(len)).c_str());
-                cx += displayWidth(val.substr(i, static_cast<size_t>(len)));
+                cx += utf8Width(val.substr(i, static_cast<size_t>(len)));
             }
             wattroff(win, COLOR_PAIR(color) | attr);
             i += len;
@@ -1115,7 +1064,7 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
         for (const auto &r : rows_) {
             int lines = 1;
             if (!r.isToggle && valW > 10)
-                lines = static_cast<int>(wrapDisplay(displayOf(r), valW).size());
+                lines = static_cast<int>(utf8Wrap(displayOf(r), valW).size());
             vinfo.push_back({v, lines});
             v += lines;
         }
@@ -1216,7 +1165,7 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
 
             // Value segment for this wrapped line
             const std::string &showText = displayOf(row);
-            auto segs = wrapDisplay(showText, valW);
+            auto segs = utf8Wrap(showText, valW);
             std::string seg = (L < static_cast<int>(segs.size())) ? segs[L] : std::string();
 
             // Byte offset of this segment inside showText (segments are
@@ -1241,7 +1190,7 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
                 }
                 if (!npart.empty()) {
                     wattron(win, COLOR_PAIR(CP_ATTR_TIME_OLD) | A_NORMAL);
-                    mvwaddstr(win, y, nameW + 2 + displayWidth(vpart), npart.c_str());
+                    mvwaddstr(win, y, nameW + 2 + utf8Width(vpart), npart.c_str());
                     wattroff(win, COLOR_PAIR(CP_ATTR_TIME_OLD) | A_NORMAL);
                 }
             } else {
