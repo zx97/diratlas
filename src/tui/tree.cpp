@@ -459,10 +459,11 @@ void TreeWidget::draw(WINDOW *win, bool focused) {
             if (!node->loadError.empty())
                 line += " \u26A0\uFE0F";
             line += " " + node->name;
-            int avail = maxX - 1;
+            int avail = maxX - 1 - indent;
+            if (avail < 0) avail = 0;
             if (static_cast<int>(line.size()) > avail)
                 line = utf8Truncate(line, avail);
-            if (indent + static_cast<int>(line.size()) < maxX)
+            if (!line.empty())
                 mvwaddstr(win, y, indent, line.c_str());
         }
 
