@@ -35,10 +35,6 @@ struct LDAPEntry {
     std::string getAttr(const std::string &name) const;
     /// @brief Get all string values for an attribute.
     std::vector<std::string> getAttrs(const std::string &name) const;
-    /// @brief Get first raw binary value for an attribute.
-    std::vector<uint8_t> getRawAttr(const std::string &name) const;
-    /// @brief Get all raw binary values for an attribute.
-    std::vector<std::vector<uint8_t>> getRawAttrs(const std::string &name) const;
 };
 
 /**

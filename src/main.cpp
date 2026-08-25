@@ -436,7 +436,8 @@ MODULES
   src/main.cpp          CLI parsing, LDAP session, TUI launch
   src/ldap_conn.*       OpenLDAP libldap wrapper
   src/ldapcore/*        Generic LDAP formatting (GeneralizedTime,
-                        durations, binary/HEX, byte helpers, DN helpers)
+                        durations, binary/HEX, byte helpers, UTF-8 wrap,
+                        DN helpers)
   src/ad/*              Active Directory (SID, GUID, flags, NT timestamps)
   src/vars.*            Constants, maps, emoji, predefined queries
   src/tui/*             ncurses TUI: tree, attrs panel, search
@@ -506,6 +507,18 @@ FLAGS (ldapsearch-compatible)
     -E sss=<attr>    Server-side sort
     -E subentries=true
     -e !assert=<filter>  Assertion control (critical)
+
+  Extended operations:
+    --whoami              RFC 4532: print the authzID
+    --passwd-modify[=dn]  RFC 3062: change password (user = bind DN if omitted)
+    --passwd-old / --passwd-new   RFC 3062: old / new password
+    --cancel <msgid>      RFC 3909: cancel an in-flight operation
+    --abandon <msgid>     RFC 4511: abandon an in-flight operation
+    --increment attr=delta  RFC 4525: atomic integer increment on the -b entry
+    --capabilities[=name] RootDSE capability attribute (supportedControl, ...)
+    --sync-refresh-only   RFC 4533: one sync refreshOnly pass
+    --persistent-search   RFC 4533-style change notifications (server-dependent)
+    --extended-op <oid>[:hex]  Generic extended operation
 
 ───────────────────────────────────────────────────────────────
 KEYBOARD

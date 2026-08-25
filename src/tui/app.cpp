@@ -340,7 +340,7 @@ bool App::init(LDAPConn &conn, const std::string &initFilter,
                 if (!entry.attributeNames.empty()) {
                     auto objClasses = entry.getAttrs("objectClass");
                     auto mandatory = getMandatoryAttrs(*conn_, objClasses);
-                    auto ocsi = loadOCSchema(*conn_);
+                    const auto &ocsi = getOCSchema();
                     attrs_->show(entry, mandatory, &ocsi);
                 }
             }
@@ -357,7 +357,7 @@ bool App::init(LDAPConn &conn, const std::string &initFilter,
     if (!entry.attributeNames.empty()) {
         auto objClasses = entry.getAttrs("objectClass");
         auto mandatory = getMandatoryAttrs(*conn_, objClasses);
-        auto ocsi = loadOCSchema(*conn_);
+        const auto &ocsi = getOCSchema();
         attrs_->show(entry, mandatory, &ocsi);
     }
     log_ = dn.empty() ? "RootDSE" : dn;
@@ -1144,7 +1144,7 @@ void App::handleKey(int ch) {
             if (!entry.attributeNames.empty()) {
                 auto objClasses = entry.getAttrs("objectClass");
                 auto mandatory = getMandatoryAttrs(*conn_, objClasses);
-                auto ocsi = loadOCSchema(*conn_);
+                const auto &ocsi = getOCSchema();
                 attrs_->show(entry, mandatory, &ocsi);
                 currentDN_ = targetDN;
                 log_ = targetDN;
@@ -1190,6 +1190,14 @@ void App::expandTreeNode(void *nodePtr) {
     });
 }
 
+const OCSchemaInfo &App::getOCSchema() {
+    if (!ocSchemaLoaded_) {
+        ocSchema_ = loadOCSchema(*conn_);
+        ocSchemaLoaded_ = true;
+    }
+    return ocSchema_;
+}
+
 void App::loadSelectedEntry() {
     if (!tree_) return;
     std::string dn = tree_->selectedDN();
@@ -1210,7 +1218,7 @@ void App::loadSelectedEntry() {
                 if (!entry.attributeNames.empty()) {
                     auto objClasses = entry.getAttrs("objectClass");
                     pendingMandatory_ = getMandatoryAttrs(*conn_, objClasses);
-                    pendingOcInfo_ = loadOCSchema(*conn_);
+                    pendingOcInfo_ = getOCSchema();
                     pendingEntry_ = std::move(entry);
                     pendingLog_ = dn.empty() ? "RootDSE" : dn;
                 } else {

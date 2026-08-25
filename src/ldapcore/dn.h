@@ -23,7 +23,4 @@ std::string parentOf(const std::string &dn);
 /** @brief RDN of a distinguished name ("cn=a,ou=b,dc=x" → "cn=a"). */
 std::string rdnOf(const std::string &dn);
 
-/** @brief Child DN built from a parent and an RDN ("cn=x" + "ou=b,dc=y" → "cn=x,ou=b,dc=y"). */
-std::string buildChildDn(const std::string &rdn, const std::string &parentDN);
-
 } // namespace diratlas::ldapcore

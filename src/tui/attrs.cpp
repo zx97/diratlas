@@ -1134,6 +1134,10 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
              || row.name.find(searchStr_) != std::string::npos);
         bool useSyntaxHL = !row.isToggle && !matchSearch && isSchemaLikeAttr(lowerName(row.name));
 
+        // Value segments computed once per row (wrapped by display columns).
+        const std::string &showText = displayOf(row);
+        auto segs = utf8Wrap(showText, valW);
+
         for (int L = 0; L < nlines && y < maxY; L++) {
             int v = vinfo[i].vstart + L;
             if (v < scrollOffset_ || v >= scrollOffset_ + dataH) continue;
@@ -1164,8 +1168,6 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
             }
 
             // Value segment for this wrapped line
-            const std::string &showText = displayOf(row);
-            auto segs = utf8Wrap(showText, valW);
             std::string seg = (L < static_cast<int>(segs.size())) ? segs[L] : std::string();
 
             // Byte offset of this segment inside showText (segments are

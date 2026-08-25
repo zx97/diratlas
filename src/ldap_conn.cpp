@@ -56,19 +56,6 @@ std::vector<std::string> LDAPEntry::getAttrs(const std::string &name) const {
     return {};
 }
 
-std::vector<uint8_t> LDAPEntry::getRawAttr(const std::string &name) const {
-    auto it = findKeyCi(binaryAttributes, name);
-    if (it != binaryAttributes.end() && !it->second.empty())
-        return it->second[0];
-    return {};
-}
-
-std::vector<std::vector<uint8_t>> LDAPEntry::getRawAttrs(const std::string &name) const {
-    auto it = findKeyCi(binaryAttributes, name);
-    if (it != binaryAttributes.end()) return it->second;
-    return {};
-}
-
 // ── LDAPConn: Construction / Destruction ────────────────
 
 LDAPConn::LDAPConn() {}

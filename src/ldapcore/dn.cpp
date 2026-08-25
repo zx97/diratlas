@@ -40,9 +40,4 @@ std::string rdnOf(const std::string &dn) {
     return dn;
 }
 
-std::string buildChildDn(const std::string &rdn, const std::string &parentDN) {
-    if (parentDN.empty()) return rdn;
-    return rdn + "," + parentDN;
-}
-
 } // namespace diratlas::ldapcore

@@ -318,8 +318,9 @@ src/
 │   ├── attrdesc.h/.cpp  AttributeDescription parser (RFC 4512 §2.5.2: type + ;options)
 │   ├── bytes.h/.cpp  hex, base64, LE32, printability, safe int parsing,
 │   │                 LDIF safe-string check
-│   └── dn.h/.cpp     pure DN helpers (rdnOf, parentOf, braceIdx,
-│                     buildChildDn) — no LDAP dependency, unit-tested
+│   ├── utf8.h/.cpp   UTF-8 decode, display width, truncate/wrap by columns
+│   └── dn.h/.cpp     pure DN helpers (rdnOf, parentOf, braceIdx) — no LDAP
+│                     dependency, unit-tested
 ├── ad/               Active Directory specifics — only used for AD servers
 │   ├── format.h/.cpp AD attribute formatting, NT time/interval conversion
 │   ├── flags.h/.cpp  UAC, systemFlags, bitmask expansion, RID labels
@@ -330,8 +331,8 @@ src/
 │   ├── app.h/.cpp    App: windows, event loop, worker thread, menus, splitter
 │   ├── tree.h/.cpp   TreeWidget/TreeNode: hierarchy browser, search results
 │   └── attrs.h/.cpp  AttrsWidget: attribute panel, schema lookup, inline edit
-└── tests/            unit tests (ctest): test_dn.cpp → `test_dn`,
-                     test_attrdesc.cpp → `test_attrdesc`
+└── tests/            unit tests (ctest): `test_dn`, `test_attrdesc`,
+                     `test_bytes`, `test_attrs`, `test_utf8`
 ```
 
 ### Tests
@@ -343,3 +344,19 @@ can be unit-tested without a server:
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
+
+### Display colours and annotations
+
+- Attribute values are **UTF-8 aware**: multi-byte characters (Cyrillic,
+  Greek, emoji) are never split when wrapping or truncating, and a
+  non-UTF-8 environment locale falls back to `C.UTF-8`.
+- **objectClass** rows (explicit + inherited `(implicit from …)` chain) are
+  shown in a dedicated orange.
+- **Operational** attribute values are green; recent timestamps (< 1 h) are
+  bold green ("light green").
+- On the RootDSE, **`supported*`** values carry a short human description
+  (e.g. `Paged Results (RFC 2696)`) rendered in yellow so it is clearly an
+  annotation, not part of the value.
+- When the RootDSE does not expose `namingContexts`, DirAtlas falls back to
+  the empty base so the tree still opens; exposed contexts that are not
+  readable with the current bind stay visible (marked with ⚠️).

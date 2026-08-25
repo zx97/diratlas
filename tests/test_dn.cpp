@@ -16,7 +16,6 @@
 using diratlas::ldapcore::braceIdx;
 using diratlas::ldapcore::parentOf;
 using diratlas::ldapcore::rdnOf;
-using diratlas::ldapcore::buildChildDn;
 
 static int failures = 0;
 
@@ -48,10 +47,6 @@ int main() {
     // Escaped comma inside an RDN value must not split the DN.
     CHECK(rdnOf("cn=doe\\,john,ou=b,dc=x") == "cn=doe\\,john");
     CHECK(parentOf("cn=doe\\,john,ou=b,dc=x") == "ou=b,dc=x");
-
-    // buildChildDn
-    CHECK(buildChildDn("cn=x", "ou=b,dc=y") == "cn=x,ou=b,dc=y");
-    CHECK(buildChildDn("cn=x", "") == "cn=x");
 
     if (failures == 0) {
         std::cout << "test_dn: all checks passed" << std::endl;

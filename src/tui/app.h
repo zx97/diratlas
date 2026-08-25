@@ -74,6 +74,8 @@ private:
      *         map to KEY_F(n) under the xterm terminfo. */
     int readKey();
     void loadSelectedEntry();
+    /** @brief Cached objectClass schema (loaded once, reused per entry). */
+    const OCSchemaInfo &getOCSchema();
     void expandTreeNode(void *nodePtr);
     void appExportLdif();
     void appDeleteEntry();
@@ -145,6 +147,8 @@ private:
     std::string filter_;                  ///< Active LDAP filter string
     std::string currentDN_;               ///< DN of last-selected entry
     AttrSchemaInfo attrSchema_;           ///< attributeTypes from the subschema
+    OCSchemaInfo ocSchema_;               ///< cached objectClass schema (loaded once)
+    bool ocSchemaLoaded_{false};
 
     // ── Background operation support ──
     std::atomic<bool> loading_{false};    ///< Background LDAP search in progress
