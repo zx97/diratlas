@@ -15,6 +15,7 @@
 #include "../ldapcore/attrdesc.h"
 #include <ncurses.h>
 #include <locale.h>
+#include <langinfo.h>
 #include <cstring>
 #include <algorithm>
 #include <chrono>
@@ -220,6 +221,14 @@ App::~App() {
 
 bool App::initNCurses() {
     setlocale(LC_ALL, "");
+    // Fall back to a known UTF-8 locale when the environment locale is
+    // invalid or non-UTF-8 (e.g. LANG=UTF-8), so ncursesw renders
+    // multi-byte characters (emoji, Cyrillic, Greek) correctly.
+    const char *codeset = nl_langinfo(CODESET);
+    if (!codeset || (strcmp(codeset, "UTF-8") != 0 && strcmp(codeset, "utf-8") != 0)) {
+        if (!setlocale(LC_ALL, "C.UTF-8"))
+            setlocale(LC_ALL, "C.utf8");
+    }
 
     initscr();
     if (!stdscr) return false;
