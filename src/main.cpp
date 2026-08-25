@@ -1304,10 +1304,16 @@ int main(int argc, char **argv) {
     // ── Auto-detect search base from RootDSE if not supplied ──
     if (!cfg.baseSet) {
         if (!conn.findRootDN(cfg.base)) {
-            std::cerr << "Could not find root DN" << std::endl; return 1;
+            // Some servers (proxies, restricted dirs) do not expose
+            // namingContexts; fall back to the empty RootDSE base so the
+            // TUI/CLI still show the tree instead of bailing out.
+            cfg.base = "";
+            note("Root DN: <RootDSE> (no namingContexts exposed)");
+            diratlas::dbgLog(diratlas::LDAP_DEBUG_TRACE, "base: RootDSE fallback (no namingContexts)");
+        } else {
+            note("Root DN: " + cfg.base);
+            diratlas::dbgLog(diratlas::LDAP_DEBUG_TRACE, "base: auto-detected " + cfg.base);
         }
-        note("Root DN: " + cfg.base);
-        diratlas::dbgLog(diratlas::LDAP_DEBUG_TRACE, "base: auto-detected " + cfg.base);
     }
     conn.defaultRootDN = cfg.base;
     diratlas::dbgLog(diratlas::LDAP_DEBUG_TRACE, "base: " + cfg.base);
