@@ -19,28 +19,52 @@ namespace diratlas {
 
 // ── LDAPEntry implementation ─────────────────────────────
 
+namespace {
+// LDAP attribute names are case-insensitive (RFC 4512); servers may return
+// a different casing than the caller asks for (e.g. "subschemasubentry" vs
+// "subschemaSubentry"), so fall back to a case-insensitive key scan.
+bool keyEqCi(const std::string &a, const std::string &b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(a[i])) !=
+            std::tolower(static_cast<unsigned char>(b[i])))
+            return false;
+    }
+    return true;
+}
+template <typename Map>
+typename Map::const_iterator findKeyCi(const Map &m, const std::string &name) {
+    auto it = m.find(name);
+    if (it != m.end()) return it;
+    for (it = m.begin(); it != m.end(); ++it) {
+        if (keyEqCi(it->first, name)) return it;
+    }
+    return m.end();
+}
+} // namespace
+
 std::string LDAPEntry::getAttr(const std::string &name) const {
-    auto it = attributes.find(name);
+    auto it = findKeyCi(attributes, name);
     if (it != attributes.end() && !it->second.empty())
         return it->second[0];
     return "";
 }
 
 std::vector<std::string> LDAPEntry::getAttrs(const std::string &name) const {
-    auto it = attributes.find(name);
+    auto it = findKeyCi(attributes, name);
     if (it != attributes.end()) return it->second;
     return {};
 }
 
 std::vector<uint8_t> LDAPEntry::getRawAttr(const std::string &name) const {
-    auto it = binaryAttributes.find(name);
+    auto it = findKeyCi(binaryAttributes, name);
     if (it != binaryAttributes.end() && !it->second.empty())
         return it->second[0];
     return {};
 }
 
 std::vector<std::vector<uint8_t>> LDAPEntry::getRawAttrs(const std::string &name) const {
-    auto it = binaryAttributes.find(name);
+    auto it = findKeyCi(binaryAttributes, name);
     if (it != binaryAttributes.end()) return it->second;
     return {};
 }
