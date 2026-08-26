@@ -58,13 +58,26 @@ bool dnIsAncestorOrSelf(const std::string &ancestor, const std::string &dn) {
 
 // Split a dn= target ("dn.subtree=ou=x,dc=y", "dn.base=...", ...) into its
 // scope kind and the base DN. Empty kind when the target is not a dn target.
+// Slapd.access(5) style aliases are normalised: sub=subtree, onelevel=one,
+// baseObject=base, exact=base (they are synonyms in the grammar).
 std::pair<std::string, std::string> parseDnScope(const std::string &target) {
-    static const char *kinds[] = {"dn.subtree", "dn.children", "dn.one",
-                                  "dn.exact", "dn.base", "dn.regex", "dn"};
-    for (const char *k : kinds) {
-        size_t l = std::strlen(k);
-        if (target.rfind(k, 0) == 0 && target.size() > l && target[l] == '=')
-            return {k, target.substr(l + 1)};
+    struct Entry { const char *key; const char *kind; };
+    static const Entry kinds[] = {
+        {"dn.onelevel", "dn.one"},
+        {"dn.baseobject", "dn.base"},
+        {"dn.subtree", "dn.subtree"},
+        {"dn.children", "dn.children"},
+        {"dn.one", "dn.one"},
+        {"dn.exact", "dn.exact"},
+        {"dn.base", "dn.base"},
+        {"dn.regex", "dn.regex"},
+        {"dn.sub", "dn.subtree"},
+        {"dn", "dn"},
+    };
+    for (const auto &e : kinds) {
+        size_t l = std::strlen(e.key);
+        if (target.rfind(e.key, 0) == 0 && target.size() > l && target[l] == '=')
+            return {e.kind, target.substr(l + 1)};
     }
     return {"", ""};
 }

@@ -53,6 +53,21 @@ int main() {
         auto r2 = parseAcl("to dn.regex=\"^uid=.*,ou=people,dc=example,dc=com$\" by * read");
         CHECK(r2.targetComplex);
     }
+    // --- dn style aliases: sub=subtree, onelevel=one, baseObject=base,
+    //     exact=base behave identically ---
+    {
+        std::string child = "ou=Y,ou=X,dc=eu";
+        CHECK(evaluateAcl(parseAclValues({"to dn.sub=\"ou=X,dc=eu\" by * read"}),
+                          "u", child, "*") == "read");
+        CHECK(evaluateAcl(parseAclValues({"to dn.onelevel=\"ou=X,dc=eu\" by * read"}),
+                          "u", child, "*") == "read");
+        CHECK(evaluateAcl(parseAclValues({"to dn.onelevel=\"ou=X,dc=eu\" by * read"}),
+                          "u", "ou=X,dc=eu", "*") == "none");
+        CHECK(evaluateAcl(parseAclValues({"to dn.baseObject=\"ou=X,dc=eu\" by * read"}),
+                          "u", "ou=X,dc=eu", "*") == "read");
+        CHECK(evaluateAcl(parseAclValues({"to dn.exact=\"ou=X,dc=eu\" by * read"}),
+                          "u", child, "*") == "none");
+    }
     // --- dn target with attrs= keeps both parts ---
     {
         auto r = parseAcl("to dn.regex=ou=People,dc=(.+),dc=europa,dc=eu attrs=cn by * read");
@@ -122,6 +137,57 @@ int main() {
                           "uid=bob,ou=People,dc=europa,dc=eu", "mail") == "none");
         CHECK(evaluateAcl(rules, "uid=bob,ou=People,dc=europa,dc=eu",
                           "uid=bob,ou=Other,dc=europa,dc=eu", "cn") == "none");
+    }
+    // --- scopes: dn.base acts on the exact entry only; dn.subtree includes
+    //     the entry AND its descendants; dn.one children only; dn.children
+    //     descendants only ---
+    {
+        std::string root = "ou=X,dc=eu";
+        std::string child = "ou=Y,ou=X,dc=eu";
+        std::string grand = "ou=Z,ou=Y,ou=X,dc=eu";
+        CHECK(evaluateAcl(parseAclValues({"to dn.base=\"" + root + "\" by * read"}),
+                          "u", root, "*") == "read");
+        CHECK(evaluateAcl(parseAclValues({"to dn.base=\"" + root + "\" by * read"}),
+                          "u", child, "*") == "none");
+        CHECK(evaluateAcl(parseAclValues({"to dn.subtree=\"" + root + "\" by * read"}),
+                          "u", root, "*") == "read");
+        CHECK(evaluateAcl(parseAclValues({"to dn.subtree=\"" + root + "\" by * read"}),
+                          "u", child, "*") == "read");
+        CHECK(evaluateAcl(parseAclValues({"to dn.subtree=\"" + root + "\" by * read"}),
+                          "u", grand, "*") == "read");
+        CHECK(evaluateAcl(parseAclValues({"to dn.one=\"" + root + "\" by * read"}),
+                          "u", root, "*") == "none");
+        CHECK(evaluateAcl(parseAclValues({"to dn.one=\"" + root + "\" by * read"}),
+                          "u", child, "*") == "read");
+        CHECK(evaluateAcl(parseAclValues({"to dn.one=\"" + root + "\" by * read"}),
+                          "u", grand, "*") == "none");
+        CHECK(evaluateAcl(parseAclValues({"to dn.children=\"" + root + "\" by * read"}),
+                          "u", root, "*") == "none");
+        CHECK(evaluateAcl(parseAclValues({"to dn.children=\"" + root + "\" by * read"}),
+                          "u", child, "*") == "read");
+        CHECK(evaluateAcl(parseAclValues({"to dn.children=\"" + root + "\" by * read"}),
+                          "u", grand, "*") == "read");
+    }
+    // --- scopes in conflict analysis: dn.base before dn.subtree (same DN)
+    //     is NOT masked (subtree is wider); the reverse IS masked ---
+    {
+        auto rules = parseAclValues({
+            "to dn.base=\"ou=X,dc=eu\" by users read",
+            "to dn.subtree=\"ou=X,dc=eu\" by self write",
+        });
+        bool masked = false;
+        for (const auto &x : analyzeAclConflicts(rules))
+            if (x.kind == AclConflictKind::Masked) masked = true;
+        CHECK(!masked);  // the subtree rule is not covered by the base rule
+
+        auto rules2 = parseAclValues({
+            "to dn.subtree=\"ou=X,dc=eu\" by self write by * none",
+            "to dn.base=\"ou=X,dc=eu\" by users read",
+        });
+        bool masked2 = false;
+        for (const auto &x : analyzeAclConflicts(rules2))
+            if (x.kind == AclConflictKind::Masked && x.first == 0 && x.second == 1) masked2 = true;
+        CHECK(masked2);  // dn.subtree includes the entry, so the base rule dies
     }
     // --- to entry ---
     {
