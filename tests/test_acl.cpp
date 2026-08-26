@@ -475,11 +475,11 @@ int main() {
         CHECK(r4.targetComplex);
         CHECK(r4.bys.size() == 1);
         CHECK(r4.bys[0].subject == "*");  // anyone → *
-        // all maps to the manage column in the report
+        // all (ACI) checks every ACI column in the report (read/write/add/delete/...)
         std::string rep = diratlas::ldapcore::buildAclReport(
             {parseAcl("(targetattr=\"*\")(version 3.0; acl \"All\"; allow (all) userdn=\"ldap:///anyone\";)")},
             {});
-        CHECK(rep.find("manage") != std::string::npos);
+        CHECK(rep.find("selfwrite") != std::string::npos);  // ACI column present
         CHECK(rep.find("✓") != std::string::npos);
     }
 
@@ -513,7 +513,8 @@ int main() {
         // deny/negated rights do not grant a level in the report
         std::string rep = diratlas::ldapcore::buildAclReport(
             {parseAcl("access to entry by * (browse, noadd, nodelete)")}, {});
-        CHECK(rep.find("search") != std::string::npos);  // browse → search column
+        CHECK(rep.find("browse") != std::string::npos);  // Oracle column present
+        CHECK(rep.find("✗") != std::string::npos);       // noadd/nodelete denied
         // entry and attrs targets do not cover each other
         auto conflicts = analyzeAclConflicts(parseAclValues({
             "access to entry by * (browse)",

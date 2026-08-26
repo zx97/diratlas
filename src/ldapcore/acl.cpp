@@ -453,6 +453,7 @@ AclRule parseAcl(const std::string &value) {
             p = (semi == std::string::npos) ? value.size() : semi + 1;
         }
         if (r.bys.empty()) return AclRule{};
+        r.format = AclFormat::Aci;
         return r;
     }
 
@@ -558,7 +559,10 @@ AclRule parseAcl(const std::string &value) {
                     c.rights = clean.empty() ? "none" : clean;
                     if (!c.subject.empty()) r.bys.push_back(c);
                 }
-                if (!r.bys.empty()) return r;
+                if (!r.bys.empty()) {
+                    r.format = AclFormat::Oracle;
+                    return r;
+                }
             }
         }
     }
@@ -801,20 +805,118 @@ static std::string displaySubject(const AclClause &cl) {
     return cl.selector.empty() ? cl.subject : cl.selector + " " + cl.subject;
 }
 
-AclReportSize aclReportDimensions(const std::vector<AclRule> &rules,
-                                  const std::vector<AclConflict> &conflicts,
-                                  bool withGraph) {
-    // Right-hand columns of the by-clause table — full access level names,
-    // including "none", so every clause has a matching check cell.
-    static const struct { const char *name; int w; } cols[] = {
+// The rights table columns depend on the ACL grammar:
+//   Slapd   hierarchical levels: none < auth < compare < search < read <
+//           write < manage (one check at the highest granted level)
+//   Aci     independent flags of the (version 3.0) syntax
+//   Oracle  independent flags of the "access to ..." syntax
+struct AclCol { const char *name; int w; };
+static const std::vector<AclCol> &aclColumns(AclFormat fmt) {
+    static const std::vector<AclCol> slapd = {
         {"none", 4}, {"auth", 4}, {"compare", 7}, {"search", 6},
         {"read", 4}, {"write", 5}, {"manage", 6},
     };
-    const int nCols = 7;
+    static const std::vector<AclCol> aci = {
+        {"none", 4}, {"compare", 7}, {"search", 6}, {"read", 4},
+        {"write", 5}, {"add", 3}, {"delete", 6}, {"selfwrite", 9},
+        {"proxy", 5}, {"all", 3},
+    };
+    static const std::vector<AclCol> oracle = {
+        {"none", 4}, {"browse", 6}, {"search", 6}, {"read", 4},
+        {"write", 5}, {"compare", 7}, {"add", 3}, {"delete", 6},
+        {"selfwrite", 9}, {"proxy", 5}, {"export", 6}, {"import", 6},
+    };
+    switch (fmt) {
+        case AclFormat::Aci:    return aci;
+        case AclFormat::Oracle: return oracle;
+        default:                return slapd;
+    }
+}
+
+// Highest slapd level granted by a rights string: manage > write > read >
+// search > compare > auth; 0 for none/unknown. Oracle/ACI negated rights
+// (noadd, nodelete, ...) grant nothing, so they must not match a positive
+// keyword search below (e.g. "nowrite" must not count as "write").
+static int slapdLevel(const std::string &rights) {
+    std::string low = rights;
+    for (auto &c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (low.empty() || low.find("none") != std::string::npos) return 0;
+    if (low.find("all") != std::string::npos) return 6;
+    int best = 0;
+    size_t s = 0;
+    while (s <= low.size()) {
+        size_t comma = low.find(',', s);
+        std::string w = low.substr(s, comma == std::string::npos
+                                        ? std::string::npos : comma - s);
+        while (!w.empty() && (w.front() == ' ' || w.front() == '\t')) w.erase(0, 1);
+        while (!w.empty() && (w.back() == ' ' || w.back() == '\t')) w.pop_back();
+        if (!w.empty() && w.rfind("no", 0) != 0) {
+            int lv = 0;
+            if (w == "manage" || w == "proxy") lv = 6;
+            else if (w == "write" || w == "selfwrite" || w == "add" ||
+                     w == "delete" || w == "export" || w == "import") lv = 5;
+            else if (w == "read") lv = 4;
+            else if (w == "browse" || w == "search") lv = 3;
+            else if (w == "compare") lv = 2;
+            else if (w == "auth") lv = 1;
+            if (lv > best) best = lv;
+        }
+        if (comma == std::string::npos) break;
+        s = comma + 1;
+    }
+    return best;
+}
+
+// Check cell of a clause for the column at @p colIdx. Slapd: a single check
+// at the highest granted level. Aci/Oracle: one cell per independent flag —
+// "✓" when granted, "✗" when explicitly negated (noadd, ...), empty when
+// untouched; "all" grants every flag except proxy/export/import.
+static std::string aclCheckCell(const AclRule &rule, const AclClause &cl,
+                                const std::vector<AclCol> &cols, int colIdx) {
+    if (rule.format == AclFormat::Slapd)
+        return (colIdx == slapdLevel(cl.rights)) ? "\u2713" : "";
+    std::string low = cl.rights;
+    for (auto &c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    std::string name = cols[static_cast<size_t>(colIdx)].name;
+    if (name == "none")
+        return (low.empty() || low.find("none") != std::string::npos) ? "\u2713" : "";
+    if (low.find("all") != std::string::npos &&
+        name != "proxy" && name != "export" && name != "import")
+        return "\u2713";
+    // exact flag present → granted ; "no"+flag → explicitly denied
+    size_t s = 0;
+    while (s <= low.size()) {
+        size_t comma = low.find(',', s);
+        std::string w = low.substr(s, comma == std::string::npos
+                                        ? std::string::npos : comma - s);
+        while (!w.empty() && (w.front() == ' ' || w.front() == '\t')) w.erase(0, 1);
+        while (!w.empty() && (w.back() == ' ' || w.back() == '\t')) w.pop_back();
+        if (w == name) return "\u2713";
+        if (w == "no" + name) return "\u2717";
+        if (comma == std::string::npos) break;
+        s = comma + 1;
+    }
+    return "";
+}
+
+// Dominant format of a rule set: the first non-Slapd rule wins (a report
+// normally contains one grammar; mixing is rare and the columns must match).
+static AclFormat aclFormatOf(const std::vector<AclRule> &rules) {
+    for (const auto &r : rules)
+        if (r.format != AclFormat::Slapd) return r.format;
+    return AclFormat::Slapd;
+}
+
+AclReportSize aclReportDimensions(const std::vector<AclRule> &rules,
+                                  const std::vector<AclConflict> &conflicts,
+                                  bool withGraph) {
+    // Right-hand columns of the by-clause table depend on the grammar.
+    const auto &cols = aclColumns(aclFormatOf(rules));
+    const int nCols = static_cast<int>(cols.size());
     // The subject column fits the widest subject so the whole DN is shown.
     int subjW = 8;
     int rightsW = 0;
-    for (int c = 0; c < nCols; c++) rightsW += cols[c].w + 1;
+    for (int c = 0; c < nCols; c++) rightsW += cols[static_cast<size_t>(c)].w + 1;
     int titleW = 0;
     for (size_t i = 0; i < rules.size(); ++i) {
         for (const auto &cl : rules[i].bys)
@@ -850,8 +952,15 @@ AclReportSize aclReportDimensions(const std::vector<AclRule> &rules,
         conflictW = std::max(conflictW, w);
     }
     AclReportSize s;
+    // The real rights text is shown after the check table; give it room so
+    // Oracle/ACI rights (browse, noadd, nodelete, ...) are not truncated.
+    int rightsTextW = 0;
+    for (const auto &r : rules)
+        for (const auto &cl : r.bys)
+            rightsTextW = std::max(rightsTextW, diratlas::ldapcore::utf8Width(cl.rights));
     s.subjW = subjW;
-    s.boxW = std::max({titleW + 5, 12 + subjW + rightsW + 4, conflictW + 2});
+    s.boxW = std::max({titleW + 5, 12 + subjW + rightsW + 4, conflictW + 2,
+                       12 + subjW + rightsW + 4 + rightsTextW + 1});
     s.boxW = std::min(s.boxW, 110);  // keep one huge detail from bloating all bases
     return s;
 }
@@ -881,52 +990,9 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
         }
     };
 
-    // Right-hand columns of the by-clause table — full access level names,
-    // including "none" so every clause has a matching check cell.
-    struct Col { const char *name; int w; };
-    static const Col cols[] = {
-        {"none", 4}, {"auth", 4}, {"compare", 7}, {"search", 6},
-        {"read", 4}, {"write", 5}, {"manage", 6},
-    };
-    const int nCols = 7;
-
-    // Highest access level named in a rights string (manage > write > read >
-    // search > compare > auth); -1 for none/unknown/priv model. Oracle OID
-    // rights are mapped onto the slapd levels: browse→search, selfwrite→write,
-    // proxy→manage; negated rights (noadd, nodelete, ...) grant nothing.
-    auto colFor = [](const std::string &r) -> int {
-        std::string low = r;
-        for (auto &c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (low.empty() || low.find("none") != std::string::npos) return 0;
-        // "all" (ACI shorthand) equals manage.
-        if (low.find("all") != std::string::npos) return 6;
-        // Walk the comma-separated rights; a "no" prefix is a denial and does
-        // not grant a level, so it must not match the positive keyword search
-        // below (e.g. "nowrite" must not count as "write").
-        int best = 0;
-        size_t s = 0;
-        while (s <= low.size()) {
-            size_t comma = low.find(',', s);
-            std::string w = low.substr(s, comma == std::string::npos
-                                            ? std::string::npos : comma - s);
-            while (!w.empty() && (w.front() == ' ' || w.front() == '\t')) w.erase(0, 1);
-            while (!w.empty() && (w.back() == ' ' || w.back() == '\t')) w.pop_back();
-            if (!w.empty() && w.rfind("no", 0) != 0) {
-                int lv = 0;
-                if (w == "manage" || w == "proxy") lv = 6;
-                else if (w == "write" || w == "selfwrite" || w == "add" ||
-                         w == "delete" || w == "export" || w == "import") lv = 5;
-                else if (w == "read") lv = 4;
-                else if (w == "browse" || w == "search") lv = 3;
-                else if (w == "compare") lv = 2;
-                else if (w == "auth") lv = 1;
-                if (lv > best) best = lv;
-            }
-            if (comma == std::string::npos) break;
-            s = comma + 1;
-        }
-        return best;
-    };
+    // Right-hand columns of the by-clause table depend on the grammar.
+    const auto &cols = aclColumns(aclFormatOf(rules));
+    const int nCols = static_cast<int>(cols.size());
 
     auto padCols = [](const std::string &s, int w) -> std::string {
         std::string t = s;
@@ -1006,7 +1072,6 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
             std::string conn = std::string(last ? "\u2514\u2500" : "\u251C\u2500");
             std::string subj = displaySubject(cl);
             int sw = diratlas::ldapcore::utf8Width(subj);
-            int ci = colFor(cl.rights);
 
             // Row: "│  <conn> by <subj> │ <cells>│" padded to boxW.
             std::string line1 = "\u2502  " + conn + " by ";
@@ -1022,8 +1087,19 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
                     subj, subjW - 1).size());
             }
             for (int c = 0; c < nCols; c++) {
-                std::string cell = (c == ci) ? "\u2713" : "";
-                line1 += padCols(cell, cols[c].w) + "\u2502";
+                std::string cell = aclCheckCell(r, cl, cols, c);
+                line1 += padCols(cell, cols[static_cast<size_t>(c)].w) + "\u2502";
+            }
+            // Show the real rights after the check table: the slapd columns
+            // are a hierarchy, but ACI/Oracle rights (browse, selfwrite,
+            // noadd, nodelete, ...) are independent flags that a single
+            // check cell cannot express. Truncate to keep the box aligned.
+            {
+                std::string rtxt = " " + cl.rights;
+                int room = boxW - 1 - diratlas::ldapcore::utf8Width(line1);
+                if (room > 1 && diratlas::ldapcore::utf8Width(rtxt) > room)
+                    rtxt = diratlas::ldapcore::utf8Truncate(rtxt, room) + "\u2026";
+                if (room > 1) line1 += rtxt;
             }
             out += line1 + padCols("", boxW - 1 - diratlas::ldapcore::utf8Width(line1)) +
                    "\u2502\n";

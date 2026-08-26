@@ -11,6 +11,13 @@
 
 namespace diratlas::ldapcore {
 
+/// Which ACL grammar a rule was parsed from — drives the report columns.
+enum class AclFormat {
+    Slapd,   ///< OpenLDAP olcAccess: hierarchical levels (auth<...<manage)
+    Aci,     ///< 389 DS / Red Hat / PingDirectory / ApacheDS (version 3.0)
+    Oracle,  ///< Oracle OID: independent flags (browse, noadd, nodelete, ...)
+};
+
 /// One "by <subject> <rights>" clause inside an ACL rule.
 struct AclClause {
     std::string subject;   ///< "*", "self", "anonymous", "users", "dn=...", ...
@@ -29,6 +36,7 @@ struct AclRule {
     bool targetComplex{false};          ///< dn.subtree/one, filter, etc. — hard to model
     std::vector<AclClause> bys;         ///< ordered clauses
     std::string raw;                    ///< original value
+    AclFormat format{AclFormat::Slapd}; ///< grammar the rule was parsed from
 };
 
 /// Kind of ACL conflict detected by static analysis.
