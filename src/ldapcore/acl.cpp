@@ -713,7 +713,13 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
             out += line1 + padCols("", boxW - 1 - diratlas::ldapcore::utf8Width(line1)) +
                    "\u2502\n";
             if (!remainder.empty()) {
-                std::string line2 = "\u2502  \u2502   " + remainder;
+                // Continuation line uses the same table layout (subject
+                // column padded to subjW, then empty cells), so the right
+                // border │ stays aligned and the columns stay closed.
+                std::string line2 = "\u2502  \u2502     ";
+                line2 += padCols(remainder, subjW) + " \u2502 ";
+                for (int c = 0; c < nCols; c++)
+                    line2 += padCols("", cols[c].w) + "\u2502";
                 out += line2 + padCols("", boxW - 1 - diratlas::ldapcore::utf8Width(line2)) +
                        "\u2502\n";
             }
