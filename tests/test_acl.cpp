@@ -157,6 +157,16 @@ int main() {
                           "userPassword") == "read");
     }
 
+    // --- evaluateAcl: dn.base subject ---
+    {
+        auto rules = parseAclValues({
+            "to * by dn.base=\"gidNumber=1000+uidNumber=1000,cn=peercred,cn=external,cn=auth\" manage by * none",
+        });
+        CHECK(evaluateAcl(rules, "gidNumber=1000+uidNumber=1000,cn=peercred,cn=external,cn=auth",
+                          "cn=config", "*") == "manage");
+        CHECK(evaluateAcl(rules, "uid=bob,ou=people,dc=x", "cn=config", "*") == "none");
+    }
+
     if (failures == 0) {
         std::cout << "test_acl: all checks passed" << std::endl;
         return 0;

@@ -117,9 +117,14 @@ bool subjectMatches(const std::string &subject, const std::string &userDN,
     if (subject == "anonymous") return userDN.empty();
     if (subject == "users") return !userDN.empty();
     if (subject == "peers") return true;
-    if (subject.rfind("dn=", 0) == 0) {
-        std::string dn = subject.substr(3);
-        return userDN == dn;
+    if (subject.rfind("dn", 0) == 0) {
+        // dn=..., dn.base=..., dn.exact=..., dn.regex=...
+        auto eq = subject.find('=');
+        if (eq != std::string::npos) {
+            std::string dn = subject.substr(eq + 1);
+            return userDN == dn;
+        }
+        return false;
     }
     if (subject.rfind("group/", 0) == 0) return false;  // not modelled — no match
     return false;  // unknown subject — no match
@@ -131,6 +136,15 @@ AclRule parseAcl(const std::string &value) {
     AclRule r;
     r.raw = value;
     auto toks = tokenize(value);
+    // skip the olcAccess numbering prefix ("{0}to * by ..." or "{0} to * by ...")
+    if (!toks.empty() && toks[0].size() >= 2 && toks[0][0] == '{') {
+        auto close = toks[0].find('}');
+        if (close != std::string::npos) {
+            std::string rest = toks[0].substr(close + 1);
+            if (!rest.empty()) toks[0] = rest;
+            else toks.erase(toks.begin());
+        }
+    }
     size_t i = 0;
     // optional leading "to"
     if (i < toks.size() && toks[i] == "to") ++i;
