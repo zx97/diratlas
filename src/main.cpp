@@ -1370,17 +1370,30 @@ int main(int argc, char **argv) {
             std::cerr << "--acl-check needs a base via -b (e.g. olcDatabase={1}mdb,cn=config)" << std::endl;
             return 1;
         }
+        // Print a section title framed at column 0 so each analysed base is
+        // clearly visible as the root of the rules that follow it.
+        auto printSection = [](const std::string &title) {
+            int w = static_cast<int>(title.size()) + 4;
+            std::cout << "\u250C";
+            for (int i = 0; i < w; ++i) std::cout << "\u2500";
+            std::cout << "\u2510\n";
+            std::cout << "\u2502 " << title << " \u2502\n";
+            std::cout << "\u2514";
+            for (int i = 0; i < w; ++i) std::cout << "\u2500";
+            std::cout << "\u2518\n";
+        };
         // Analyse one database's olcAccess list on its own: rules can only
         // overlap within the same base, never across databases.
         auto analyseBase = [&](const std::string &label, const std::vector<std::string> &vals,
                                const std::string &evalDn) {
             if (vals.empty()) {
-                std::cout << "  " << label << "  — no olcAccess values\n\n";
+                printSection(label + "  — no olcAccess values");
+                std::cout << "\n";
                 return;
             }
             auto rules = diratlas::ldapcore::parseAclValues(vals);
             auto conflicts = diratlas::ldapcore::analyzeAclConflicts(rules);
-            std::cout << "  " << label << "  — " << rules.size() << " olcAccess rules\n";
+            printSection(label + "  — " + std::to_string(rules.size()) + " olcAccess rules");
             std::cout << diratlas::ldapcore::buildAclReport(rules, conflicts, cfg.aclGraph);
             if (conflicts.empty())
                 std::cout << "  No conflicts detected.\n";
