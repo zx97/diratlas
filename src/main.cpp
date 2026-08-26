@@ -1368,58 +1368,76 @@ int main(int argc, char **argv) {
             std::cerr << "--acl-check needs a base via -b (e.g. olcDatabase={1}mdb,cn=config)" << std::endl;
             return 1;
         }
+        // Analyse one database's olcAccess list on its own: rules can only
+        // overlap within the same base, never across databases.
+        auto analyseBase = [&](const std::string &label, const std::vector<std::string> &vals,
+                               const std::string &evalDn) {
+            if (vals.empty()) {
+                std::cout << label << ": no olcAccess values\n";
+                return;
+            }
+            auto rules = diratlas::ldapcore::parseAclValues(vals);
+            std::cout << label << ": " << rules.size() << " olcAccess rules\n";
+            for (size_t i = 0; i < rules.size(); ++i) {
+                std::cout << "  [" << (i + 1) << "] to " << rules[i].target << "\n";
+                for (const auto &cl : rules[i].bys)
+                    std::cout << "          by " << cl.subject << " " << cl.rights << "\n";
+            }
+            auto conflicts = diratlas::ldapcore::analyzeAclConflicts(rules);
+            if (conflicts.empty()) {
+                std::cout << "  No conflicts detected.\n";
+            } else {
+                std::cout << "  Conflicts (" << conflicts.size() << "):\n";
+                for (const auto &c : conflicts) {
+                    std::cout << "    ";
+                    switch (c.kind) {
+                        case diratlas::ldapcore::AclConflictKind::Masked:   std::cout << "MASKED"; break;
+                        case diratlas::ldapcore::AclConflictKind::Overlap:  std::cout << "OVERLAP"; break;
+                        case diratlas::ldapcore::AclConflictKind::Order:    std::cout << "ORDER"; break;
+                        case diratlas::ldapcore::AclConflictKind::Uncertain: std::cout << "UNCERTAIN"; break;
+                        default: std::cout << "?"; break;
+                    }
+                    std::cout << " rule[" << (c.first + 1) << "]/[" << (c.second + 1) << "] "
+                              << c.detail << "\n";
+                }
+            }
+            if (cfg.aclGraph) {
+                std::cout << "  Rule graph:\n" << diratlas::ldapcore::buildAclGraph(rules, conflicts);
+            }
+            if (!cfg.aclUser.empty()) {
+                std::cout << "  Evaluation (slapacl-style) for " << cfg.aclUser << ":\n";
+                std::cout << "    to " << evalDn << " (entry): "
+                          << diratlas::ldapcore::evaluateAcl(rules, cfg.aclUser, evalDn, "entry") << "\n";
+                std::cout << "    to attrs=userPassword: "
+                          << diratlas::ldapcore::evaluateAcl(rules, cfg.aclUser, evalDn, "userPassword") << "\n";
+                std::cout << "    to attrs=*: "
+                          << diratlas::ldapcore::evaluateAcl(rules, cfg.aclUser, evalDn, "*") << "\n";
+            }
+        };
+
+        // The -b entry itself carries olcAccess: analyse only that base.
         std::vector<std::string> vals;
         auto entry = conn.searchOne(cfg.base, "(objectClass=*)", {"olcAccess"}, false);
         vals = entry.getAttrs("olcAccess");
-        if (vals.empty()) {
-            std::vector<diratlas::LDAPEntry> children;
-            conn.search(cfg.base, LDAP_SCOPE_ONELEVEL, "(olcAccess=*)",
-                        {"olcAccess"}, false, children);
-            for (const auto &c : children)
-                for (const auto &v : c.getAttrs("olcAccess"))
-                    vals.push_back(v);
-        }
-        if (vals.empty()) {
-            std::cerr << "No olcAccess values found under " << cfg.base << std::endl;
-            return 1;
-        }
-        auto rules = diratlas::ldapcore::parseAclValues(vals);
-        std::cout << "olcAccess rules: " << rules.size() << "\n";
-        for (size_t i = 0; i < rules.size(); ++i) {
-            std::cout << "  [" << (i + 1) << "] to " << rules[i].target << "\n";
-            for (const auto &cl : rules[i].bys)
-                std::cout << "          by " << cl.subject << " " << cl.rights << "\n";
-        }
-        auto conflicts = diratlas::ldapcore::analyzeAclConflicts(rules);
-        if (conflicts.empty()) {
-            std::cout << "No conflicts detected.\n";
+        if (!vals.empty()) {
+            analyseBase(cfg.base, vals, cfg.base);
         } else {
-            std::cout << "Conflicts (" << conflicts.size() << "):\n";
-            for (const auto &c : conflicts) {
-                std::cout << "  ";
-                switch (c.kind) {
-                    case diratlas::ldapcore::AclConflictKind::Masked:   std::cout << "MASKED"; break;
-                    case diratlas::ldapcore::AclConflictKind::Overlap:  std::cout << "OVERLAP"; break;
-                    case diratlas::ldapcore::AclConflictKind::Order:    std::cout << "ORDER"; break;
-                    case diratlas::ldapcore::AclConflictKind::Uncertain: std::cout << "UNCERTAIN"; break;
-                    default: std::cout << "?"; break;
-                }
-                std::cout << " rule[" << (c.first + 1) << "]/[" << (c.second + 1) << "] "
-                          << c.detail << "\n";
+            // -b was a parent (e.g. cn=config): analyse each olcDatabase
+            // child separately, never merging rules across bases.
+            std::vector<diratlas::LDAPEntry> children;
+            conn.search(cfg.base, LDAP_SCOPE_ONELEVEL, "(objectClass=olcDatabaseConfig)",
+                        {"olcAccess"}, false, children);
+            bool any = false;
+            for (const auto &c : children) {
+                auto cv = c.getAttrs("olcAccess");
+                if (cv.empty()) continue;
+                analyseBase(c.dn, cv, c.dn);
+                any = true;
             }
-        }
-        if (cfg.aclGraph) {
-            std::cout << "\nRule graph:\n"
-                      << diratlas::ldapcore::buildAclGraph(rules, conflicts);
-        }
-        if (!cfg.aclUser.empty()) {
-            std::cout << "Evaluation (slapacl-style) for " << cfg.aclUser << ":\n";
-            std::cout << "  to " << cfg.base << " (entry): "
-                      << diratlas::ldapcore::evaluateAcl(rules, cfg.aclUser, cfg.base, "entry") << "\n";
-            std::cout << "  to attrs=userPassword: "
-                      << diratlas::ldapcore::evaluateAcl(rules, cfg.aclUser, cfg.base, "userPassword") << "\n";
-            std::cout << "  to attrs=*: "
-                      << diratlas::ldapcore::evaluateAcl(rules, cfg.aclUser, cfg.base, "*") << "\n";
+            if (!any) {
+                std::cerr << "No olcAccess values found under " << cfg.base << std::endl;
+                return 1;
+            }
         }
         return 0;
     }
