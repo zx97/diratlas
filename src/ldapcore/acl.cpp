@@ -503,7 +503,9 @@ std::vector<std::string> formatAclValueLines(const std::string &value) {
 AclReportSize aclReportDimensions(const std::vector<AclRule> &rules,
                                   const std::vector<AclConflict> &conflicts,
                                   bool withGraph) {
-    // Right-hand columns of the by-clause table — full access level names.
+    // Right-hand columns of the by-clause table — full access level names,
+    // plus a final "granted" text column showing the exact right string
+    // (e.g. "none", "read") for clarity.
     static const struct { const char *name; int w; } cols[] = {
         {"auth", 4}, {"compare", 7}, {"search", 6},
         {"read", 4}, {"write", 5}, {"manage", 6},
@@ -515,6 +517,14 @@ AclReportSize aclReportDimensions(const std::vector<AclRule> &rules,
     int subjW = 8;
     int rightsW = 0;
     for (int c = 0; c < nCols; c++) rightsW += cols[c].w + 1;
+    // granted column width: longest right string (capped), min "manage".
+    int grantedW = 6;
+    for (const auto &r : rules)
+        for (const auto &cl : r.bys)
+            grantedW = std::max(grantedW,
+                diratlas::ldapcore::utf8Width(cl.rights.empty() ? "none" : cl.rights));
+    grantedW = std::min(grantedW, 14);
+    rightsW += grantedW + 1;
     int titleW = 0;
     for (size_t i = 0; i < rules.size(); ++i) {
         for (const auto &cl : rules[i].bys)
@@ -624,6 +634,14 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
     // detail does not inflate every box).
     int rightsW = 0;
     for (int c = 0; c < nCols; c++) rightsW += cols[c].w + 1;
+    // granted column width: longest right string (capped), min "manage".
+    int grantedW = 6;
+    for (const auto &r : rules)
+        for (const auto &cl : r.bys)
+            grantedW = std::max(grantedW,
+                diratlas::ldapcore::utf8Width(cl.rights.empty() ? "none" : cl.rights));
+    grantedW = std::min(grantedW, 14);
+    rightsW += grantedW + 1;
     auto dims = aclReportDimensions(rules, conflicts, withGraph);
     int subjW = forcedSubjW >= 0 ? std::min(forcedSubjW, 42) : dims.subjW;
     int tableW = 12 + subjW + rightsW;          // "│  ├─ by " + subject + columns
@@ -661,29 +679,37 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
         }
 
         // Header row with the rights column names.
-        out += "\u2502  \u251C\u2500 by ";
-        out += padCols("", subjW) + " \u2502 ";
-        for (int c = 0; c < nCols; c++)
-            out += padCols(cols[c].name, cols[c].w) + "\u2502";
-        out += "\n";
+        // The row body is "│  ├─ by <subj> │ <cols>│<granted>│"; pad to boxW
+        // so the right border │ closes the box.
+        {
+            std::string body = "\u2502  \u251C\u2500 by ";
+            body += padCols("", subjW) + " \u2502 ";
+            for (int c = 0; c < nCols; c++)
+                body += padCols(cols[c].name, cols[c].w) + "\u2502";
+            body += padCols("granted", grantedW) + "\u2502";
+            out += body + padCols("", boxW - 1 - diratlas::ldapcore::utf8Width(body)) +
+                   "\u2502\n";
+        }
 
         // One row per by-clause; the left ├─/└─ links each clause to the
         // rule, the table marks the granted access level with a check.
         for (size_t k = 0; k < r.bys.size(); ++k) {
             const auto &cl = r.bys[k];
             bool last = (k + 1 == r.bys.size());
-            out += "\u2502  " + std::string(last ? "\u2514\u2500" : "\u251C\u2500") +
-                   " by ";
+            std::string body = "\u2502  " + std::string(last ? "\u2514\u2500" : "\u251C\u2500") +
+                               " by ";
             std::string subj = displaySubject(cl);
             if (diratlas::ldapcore::utf8Width(subj) > subjW)
                 subj = diratlas::ldapcore::utf8Truncate(subj, subjW - 1) + "\u2026";
-            out += padCols(subj, subjW) + " \u2502 ";
+            body += padCols(subj, subjW) + " \u2502 ";
             int ci = colFor(cl.rights);
             for (int c = 0; c < nCols; c++) {
                 std::string cell = (c == ci) ? "\u2713" : "";
-                out += padCols(cell, cols[c].w) + "\u2502";
+                body += padCols(cell, cols[c].w) + "\u2502";
             }
-            out += "\n";
+            body += padCols(cl.rights.empty() ? "none" : cl.rights, grantedW) + "\u2502";
+            out += body + padCols("", boxW - 1 - diratlas::ldapcore::utf8Width(body)) +
+                   "\u2502\n";
         }
 
         // Conflicts / graph edges for this rule, drawn as rows of the box.
