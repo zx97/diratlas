@@ -47,6 +47,12 @@ OpenLDAP tools; GNU long options are also accepted):
 ./build/diratlas --increment uidNumber=5 -b 'uid=u,dc=example,dc=com'  # RFC 4525
 ./build/diratlas --capabilities    # RootDSE supportedCapabilities
 ./build/diratlas --sync-refresh-only -b dc=example,dc=com  # RFC 4533 sync pass
+./build/diratlas -Y EXTERNAL -H ldapi://%2fvar%2frun%2fslapd.sock \
+    -b 'olcDatabase={1}mdb,cn=config' --acl-check          # analyse ACLs
+./build/diratlas -Y EXTERNAL -H ldapi://%2fvar%2frun%2fslapd.sock \
+    -b 'olcDatabase={1}mdb,cn=config' --acl-check \
+    --acl-user 'gidNumber=1000+uidNumber=1000,cn=peercred,cn=external,cn=auth'
+    # slapacl-style evaluation: which rule/clause actually grants this user
 ```
 
 See `diratlas --help` or `diratlas doc` for the full option reference.
@@ -318,6 +324,9 @@ src/
 │   ├── attrdesc.h/.cpp  AttributeDescription parser (RFC 4512 §2.5.2: type + ;options)
 │   ├── bytes.h/.cpp  hex, base64, LE32, printability, safe int parsing,
 │   │                 LDIF safe-string check
+│   ├── acl.h/.cpp    olcAccess/aci parsing, conflict analysis,
+│   │                 slapacl-style evaluation (no LDAP dependency,
+│   │                 unit-tested)
 │   ├── utf8.h/.cpp   UTF-8 decode, display width, truncate/wrap by columns
 │   └── dn.h/.cpp     pure DN helpers (rdnOf, parentOf, braceIdx) — no LDAP
 │                     dependency, unit-tested
@@ -332,7 +341,7 @@ src/
 │   ├── tree.h/.cpp   TreeWidget/TreeNode: hierarchy browser, search results
 │   └── attrs.h/.cpp  AttrsWidget: attribute panel, schema lookup, inline edit
 └── tests/            unit tests (ctest): `test_dn`, `test_attrdesc`,
-                     `test_bytes`, `test_attrs`, `test_utf8`
+                     `test_bytes`, `test_attrs`, `test_utf8`, `test_acl`
 ```
 
 ### Tests
@@ -360,3 +369,7 @@ ctest --test-dir build --output-on-failure
 - When the RootDSE does not expose `namingContexts`, DirAtlas falls back to
   the empty base so the tree still opens; exposed contexts that are not
   readable with the current bind stay visible (marked with ⚠️).
+- **ACL values** (`olcAccess`, `aci`, `orclentrylevelaci`): Enter opens a
+  structured popup with each rule's `to`/`by` clauses and the conflict
+  summary (masked rules, overlaps). `--acl-check` on the CLI does the same
+  analysis on the `-b` entry and prints an evaluation per `--acl-user`.

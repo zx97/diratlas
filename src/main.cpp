@@ -525,6 +525,14 @@ FLAGS (ldapsearch-compatible)
     --persistent-search   RFC 4533-style change notifications (server-dependent)
     --extended-op <oid>[:hex]  Generic extended operation
 
+  ACL analysis:
+    --acl-check        analyse the olcAccess rules of the -b entry
+                       (cn=config) and report conflicts: masked rules,
+                       overlaps, uncertain complex targets
+    --acl-user <dn>    with --acl-check: simulate access for this user
+                       (slapacl-style evaluation; first matching rule
+                       and clause wins)
+
 ───────────────────────────────────────────────────────────────
 KEYBOARD
 
@@ -534,6 +542,8 @@ KEYBOARD
   ← / -            Collapse tree node
   Enter            Select node (load attrs); moves focus to the
                    attributes panel so F2 edit works immediately
+                   On an olcAccess/aci value: open a structured ACL
+                   popup (parsed rules + conflict summary)
   g                Jump the tree back to the RootDSE
   /                Tree: focus filter bar with search base
                    Attrs: enter search-in-value mode
