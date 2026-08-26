@@ -952,15 +952,8 @@ AclReportSize aclReportDimensions(const std::vector<AclRule> &rules,
         conflictW = std::max(conflictW, w);
     }
     AclReportSize s;
-    // The real rights text is shown after the check table; give it room so
-    // Oracle/ACI rights (browse, noadd, nodelete, ...) are not truncated.
-    int rightsTextW = 0;
-    for (const auto &r : rules)
-        for (const auto &cl : r.bys)
-            rightsTextW = std::max(rightsTextW, diratlas::ldapcore::utf8Width(cl.rights));
     s.subjW = subjW;
-    s.boxW = std::max({titleW + 5, 12 + subjW + rightsW + 4, conflictW + 2,
-                       12 + subjW + rightsW + 4 + rightsTextW + 1});
+    s.boxW = std::max({titleW + 5, 12 + subjW + rightsW + 4, conflictW + 2});
     s.boxW = std::min(s.boxW, 110);  // keep one huge detail from bloating all bases
     return s;
 }
@@ -1089,17 +1082,6 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
             for (int c = 0; c < nCols; c++) {
                 std::string cell = aclCheckCell(r, cl, cols, c);
                 line1 += padCols(cell, cols[static_cast<size_t>(c)].w) + "\u2502";
-            }
-            // Show the real rights after the check table: the slapd columns
-            // are a hierarchy, but ACI/Oracle rights (browse, selfwrite,
-            // noadd, nodelete, ...) are independent flags that a single
-            // check cell cannot express. Truncate to keep the box aligned.
-            {
-                std::string rtxt = " " + cl.rights;
-                int room = boxW - 1 - diratlas::ldapcore::utf8Width(line1);
-                if (room > 1 && diratlas::ldapcore::utf8Width(rtxt) > room)
-                    rtxt = diratlas::ldapcore::utf8Truncate(rtxt, room) + "\u2026";
-                if (room > 1) line1 += rtxt;
             }
             out += line1 + padCols("", boxW - 1 - diratlas::ldapcore::utf8Width(line1)) +
                    "\u2502\n";
