@@ -373,9 +373,9 @@ ctest --test-dir build --output-on-failure
   the empty base so the tree still opens; exposed contexts that are not
   readable with the current bind stay visible (marked with ⚠️).
 - **ACL values** (`olcAccess`, `aci`, `orclentrylevelaci`): Enter opens a
-  structured popup with each rule's `to`/`by` clauses and the conflict
-  summary (masked rules, overlaps). `s` in the popup saves a full report
-  (rules, rule-relation graph, slapacl-style evaluations for the bind
-  identity and anonymous) to `diratlas_acl_0001.txt`. `--acl-check` on the
-  CLI does the same analysis on the `-b` entry and prints an evaluation per
-  `--acl-user`; `--acl-graph` adds the rule-relation graph.
+  popup showing the raw value with semantic syntax colours; the analysis
+  reports real problems only — **masked rules** (never reached because an
+  earlier rule covers them), **dead clauses**, and **complex targets**
+  (`dn.regex`/`filter=`) grouped per target for manual review. Plain
+  overlapping rules are normal in slapd.access (first match wins), so they
+  are not reported. `s` saves the full report to `diratlas_acl_0001.txt`.

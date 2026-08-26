@@ -5,6 +5,7 @@
 
 #include <cctype>
 #include <cstring>
+#include <map>
 #include <set>
 
 namespace diratlas::ldapcore {
@@ -96,22 +97,6 @@ bool scopeCovers(const std::string &aKind, const std::string &aDn,
     return false;
 }
 
-// Do two DN scopes have any entry in common?
-bool scopeOverlaps(const std::string &aKind, const std::string &aDn,
-                   const std::string &bKind, const std::string &bDn) {
-    if (aKind.empty() || bKind.empty()) return true;
-    if (scopeCovers(aKind, aDn, bKind, bDn) || scopeCovers(bKind, bDn, aKind, aDn))
-        return true;
-    // one(a) vs one(b) with the same parent: identical child sets.
-    if (aKind == "dn.one" && bKind == "dn.one" && aDn == bDn) return true;
-    // one(a) vs subtree(b) when a's parent is inside b: children of a overlap b.
-    if (aKind == "dn.one" && bKind == "dn.subtree" && dnIsAncestorOrSelf(bDn, aDn))
-        return true;
-    if (bKind == "dn.one" && aKind == "dn.subtree" && dnIsAncestorOrSelf(aDn, bDn))
-        return true;
-    return false;
-}
-
 // Do the attribute lists of two rules share at least one attribute?
 bool attrsOverlap(const AclRule &a, const AclRule &b) {
     bool aAll = a.targetAttrs.empty() || a.targetAttrs[0] == "*";
@@ -121,26 +106,6 @@ bool attrsOverlap(const AclRule &a, const AclRule &b) {
     for (const auto &x : b.targetAttrs)
         if (aset.count(x)) return true;
     return false;
-}
-
-bool subjectOverlaps(const std::string &a, const std::string &b) {
-    if (a == "*" || b == "*") return true;
-    if (a == b) return true;
-    // dn=... exact matches overlap only when identical; group/dn.base etc.
-    // are treated as "check manually" only if both mention dn.
-    if (a.rfind("dn", 0) == 0 || b.rfind("dn", 0) == 0) return false;
-    return false;
-}
-
-int rightsLevel(const std::string &r) {
-    if (r == "none") return 0;
-    if (r == "auth" || r == "disclose") return 1;
-    if (r == "compare") return 2;
-    if (r == "search") return 3;
-    if (r == "read") return 4;
-    if (r == "write" || r == "add" || r == "delete") return 5;
-    if (r == "manage") return 6;
-    return -1;  // unknown / combined
 }
 
 // Does target A fully cover target B? (attrs AND dn scope)
@@ -155,18 +120,37 @@ bool targetCovers(const AclRule &a, const AclRule &b) {
         for (const auto &x : b.targetAttrs)
             if (!aset.count(x)) return false;
     }
-    // The DN scope of A must contain the DN scope of B.
+    // The DN scope of A must contain the DN scope of B. When A covers all
+    // attrs it still must not "cover" a wider or disjoint DN scope: a
+    // dn.base=ou=X rule never covers "to *" (the catch-all is wider).
     auto sa = parseDnScope(a.targetDn);
     auto sb = parseDnScope(b.targetDn);
     return scopeCovers(sa.first, sa.second, sb.first, sb.second);
 }
 
-bool targetOverlaps(const AclRule &a, const AclRule &b) {
-    if (!attrsOverlap(a, b)) return false;
-    if (a.targetComplex || b.targetComplex) return true;  // uncertain -> flag
-    auto sa = parseDnScope(a.targetDn);
-    auto sb = parseDnScope(b.targetDn);
-    return scopeOverlaps(sa.first, sa.second, sb.first, sb.second);
+// Does subject A cover subject B? (A matches at least everyone B matches.)
+// Conservative: only identical subjects and "*" (which matches everyone).
+bool subjectCovers(const std::string &a, const std::string &b) {
+    if (a == "*") return true;
+    return a == b;
+}
+
+// Does every by-clause of rule B have a matching clause in rule A?
+// Reports per-clause coverage so callers can distinguish a fully dead rule
+// (Masked) from partially dead clauses (Order).
+bool clausesCovered(const AclRule &a, const AclRule &b, std::vector<bool> &bCovered) {
+    bCovered.assign(b.bys.size(), false);
+    bool all = !b.bys.empty();
+    for (size_t kb = 0; kb < b.bys.size(); ++kb) {
+        for (const auto &ca : a.bys) {
+            if (subjectCovers(ca.subject, b.bys[kb].subject)) {
+                bCovered[kb] = true;
+                break;
+            }
+        }
+        if (!bCovered[kb]) all = false;
+    }
+    return all;
 }
 
 // Does a rule target match (targetDN, attr)?
@@ -318,57 +302,78 @@ std::vector<AclRule> parseAclValues(const std::vector<std::string> &values) {
 
 std::vector<AclConflict> analyzeAclConflicts(const std::vector<AclRule> &rules) {
     std::vector<AclConflict> out;
+
+    // Pass 1 — complex targets (dn.regex, filter=, unknown forms): we cannot
+    // model them statically. Group rules by their complex DN target (the raw
+    // dn.regex/filter expression, without the per-rule attrs= list), so a
+    // dozen per-attribute rules sharing one regex yield a single "check
+    // manually" entry instead of one per rule.
+    std::map<std::string, std::vector<size_t>> complexByTarget;
+    for (size_t i = 0; i < rules.size(); ++i)
+        if (rules[i].targetComplex) {
+            std::string key = rules[i].targetDn.empty() ? rules[i].target
+                                                        : rules[i].targetDn;
+            complexByTarget[key].push_back(i);
+        }
+    for (const auto &kv : complexByTarget) {
+        const auto &idxs = kv.second;
+        // Rules sharing the target interact with the same later rules.
+        std::string detail = "complex target — check manually against rules";
+        bool any = false;
+        for (size_t j = idxs.back() + 1; j < rules.size(); ++j) {
+            const auto &b = rules[j];
+            bool bRestricts = !b.targetDn.empty() ||
+                              (!b.targetAttrs.empty() && b.targetAttrs[0] != "*");
+            if (!bRestricts || !attrsOverlap(rules[idxs.front()], b)) continue;
+            detail += " " + std::to_string(j + 1);
+            any = true;
+        }
+        if (!any) continue;
+        std::string which = "rules";
+        for (size_t k = 0; k < idxs.size(); ++k) {
+            if (k) which += ",";
+            which += " " + std::to_string(idxs[k] + 1);
+        }
+        out.push_back({AclConflictKind::Uncertain,
+                       static_cast<int>(idxs.front()),
+                       static_cast<int>(idxs.back()),
+                       which + " (" + kv.first + ") " + detail});
+    }
+
+    // Pass 2 — fully modelled rules: masking / dead clauses only. Overlap in
+    // the literal sense is normal in slapd.access (first match wins); two
+    // rules with intersecting targets are not a problem on their own.
     for (size_t i = 0; i < rules.size(); ++i) {
         const auto &a = rules[i];
+        if (a.targetComplex) continue;
         for (size_t j = i + 1; j < rules.size(); ++j) {
             const auto &b = rules[j];
+            if (b.targetComplex) continue;
 
-            // A complex target in either rule: we cannot fully model it.
-            if (a.targetComplex || b.targetComplex) {
-                if (targetOverlaps(a, b)) {
-                    out.push_back({AclConflictKind::Uncertain,
-                                   static_cast<int>(i), static_cast<int>(j),
-                                   "complex target — check manually"});
-                }
-                continue;
-            }
-
-            // Masked: rule j is fully covered by earlier rule i.
+            // Masked: rule j is fully covered by earlier rule i — its target
+            // is contained and every by-clause has a matching clause in i, so
+            // j can never be reached (first-match wins).
             if (targetCovers(a, b)) {
-                bool anyOverlap = false;
-                for (const auto &ca : a.bys)
-                    for (const auto &cb : b.bys)
-                        if (subjectOverlaps(ca.subject, cb.subject)) { anyOverlap = true; break; }
-                if (anyOverlap || b.bys.empty()) {
+                std::vector<bool> bCovered;
+                if (clausesCovered(a, b, bCovered)) {
                     out.push_back({AclConflictKind::Masked,
                                    static_cast<int>(i), static_cast<int>(j),
                                    "rule " + std::to_string(j + 1) +
                                    " is fully covered by rule " + std::to_string(i + 1)});
                     continue;
                 }
-            }
-
-            // Overlap: targets intersect and some subject pair overlaps.
-            if (targetOverlaps(a, b)) {
-                for (const auto &ca : a.bys) {
-                    for (const auto &cb : b.bys) {
-                        if (!subjectOverlaps(ca.subject, cb.subject)) continue;
-                        int la = rightsLevel(ca.rights);
-                        int lb = rightsLevel(cb.rights);
-                        if (la >= 0 && lb >= 0 && la != lb) {
-                            out.push_back({AclConflictKind::Overlap,
-                                           static_cast<int>(i), static_cast<int>(j),
-                                           "overlap on '" + ca.subject + "': rule " +
-                                           std::to_string(i + 1) + " grants '" + ca.rights +
-                                           "', rule " + std::to_string(j + 1) +
-                                           " grants '" + cb.rights + "'"});
-                        } else if (la == -1 || lb == -1) {
-                            out.push_back({AclConflictKind::Uncertain,
-                                           static_cast<int>(i), static_cast<int>(j),
-                                           "overlap with combined/unknown rights"});
-                        }
-                    }
+                // Partially dead: i covers j's target but only some clauses —
+                // the uncovered clauses can still fire, the covered ones cannot.
+                for (size_t kb = 0; kb < bCovered.size(); ++kb) {
+                    if (!bCovered[kb]) continue;
+                    out.push_back({AclConflictKind::Order,
+                                   static_cast<int>(i), static_cast<int>(j),
+                                   "clause '" + b.bys[kb].subject + " " + b.bys[kb].rights +
+                                   "' of rule " + std::to_string(j + 1) +
+                                   " is never reached: rule " + std::to_string(i + 1) +
+                                   " matches first"});
                 }
+                continue;
             }
         }
     }

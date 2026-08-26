@@ -334,7 +334,8 @@ static void printUsage(const char *prog) {
                << "  --persistent-search   RFC 4533-style persistent search (server-dependent)\n"
                << "  --sync-refresh-only   RFC 4533 sync refreshOnly pass\n"
                << "  --acl-check           Analyse the olcAccess rules of the -b entry\n"
-               << "                        and report conflicts (masked rules, overlaps)\n"
+               << "                        and report problems: masked rules (never\n"
+               << "                        reached) and complex targets to check manually\n"
                << "  --acl-user <dn>       With --acl-check: simulate access for this user\n"
                << "                        (slapacl-style, first matching rule wins)\n"
                << "  --acl-graph           With --acl-check: print the rule-relation graph\n"
@@ -534,8 +535,9 @@ FLAGS (ldapsearch-compatible)
 
   ACL analysis:
     --acl-check        analyse the olcAccess rules of the -b entry
-                       (cn=config) and report conflicts: masked rules,
-                       overlaps, uncertain complex targets
+                       (cn=config) and report problems: masked rules
+                       (never reached), dead clauses, complex targets
+                       (dn.regex/filter) grouped to check manually
     --acl-user <dn>    with --acl-check: simulate access for this user
                        (slapacl-style evaluation; first matching rule
                        and clause wins)

@@ -187,6 +187,41 @@ int main() {
             if (x.kind == AclConflictKind::Uncertain) found = true;
         CHECK(found);
     }
+    // --- uncertain: one entry per complex rule, lists interacting rules ---
+    {
+        auto rules = parseAclValues({
+            "to dn.regex=\"^ou=.*,dc=example,dc=com$\" by * read",
+            "to dn.base=\"ou=Apps,dc=example,dc=com\" attrs=cn by * read",
+            "to dn.base=\"ou=Other,dc=example,dc=com\" by * read",
+            "to * by * read",           // catch-all: not listed
+        });
+        auto c = analyzeAclConflicts(rules);
+        int uncertain = 0;
+        for (const auto &x : c)
+            if (x.kind == AclConflictKind::Uncertain) uncertain++;
+        CHECK(uncertain == 1);           // one entry for the dn.regex rule
+        bool listsTwo = false, listsCatchAll = false;
+        for (const auto &x : c) {
+            if (x.kind != AclConflictKind::Uncertain) continue;
+            if (x.detail.find("2") != std::string::npos &&
+                x.detail.find("3") != std::string::npos) listsTwo = true;
+            if (x.detail.find("4") != std::string::npos) listsCatchAll = true;
+        }
+        CHECK(listsTwo);
+        CHECK(!listsCatchAll);
+    }
+    // --- masked: catch-all never covers a dn.base rule (scope matters) ---
+    {
+        auto rules = parseAclValues({
+            "to dn.base=\"ou=Apps,dc=example,dc=com\" by users read",
+            "to * by * none",
+        });
+        auto c = analyzeAclConflicts(rules);
+        bool masked = false;
+        for (const auto &x : c)
+            if (x.kind == AclConflictKind::Masked && x.first == 0 && x.second == 1) masked = true;
+        CHECK(!masked);  // the dn.base rule is narrower; the catch-all does not mask it
+    }
     // --- empty / malformed ---
     {
         auto r = parseAcl("garbage");
