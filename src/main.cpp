@@ -1422,7 +1422,7 @@ int main(int argc, char **argv) {
             std::vector<std::string> aclAttrs;
             switch (conn.flavor) {
                 case diratlas::LDAPFlavor::NetscapeLDAP:
-                    aclAttrs = {"aci", "orclentrylevelaci"};
+                    aclAttrs = {"orclaci", "aci", "orclentrylevelaci"};
                     break;
                 case diratlas::LDAPFlavor::EDirectoryLDAP:
                     aclAttrs = {"AclEntry"};

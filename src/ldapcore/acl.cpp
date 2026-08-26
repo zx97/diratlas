@@ -14,8 +14,10 @@ namespace diratlas::ldapcore {
 
 namespace {
 
-// Split on whitespace, skipping quoted strings (slapd.access(5) allows
-// double-quoted values containing spaces).
+// Split on whitespace, skipping quoted strings and parenthesised groups
+// (slapd.access(5) allows double-quoted values with spaces; the Oracle OID
+// ACI syntax uses "(a, b)" attribute lists and "dn=\"cn=x, o=y\"" DNs with
+// spaces, so both must stay intact as one token).
 std::vector<std::string> tokenize(const std::string &s) {
     std::vector<std::string> out;
     size_t i = 0;
@@ -27,8 +29,35 @@ std::vector<std::string> tokenize(const std::string &s) {
             ++i;
             while (i < s.size() && s[i] != '"') tok += s[i++];
             if (i < s.size()) ++i;  // closing quote
+        } else if (s[i] == '(') {
+            // Protect a parenthesised group: "(a, b, c)" stays one token.
+            int depth = 0;
+            while (i < s.size()) {
+                char ch = s[i++];
+                if (ch == '(') { ++depth; tok += ch; }
+                else if (ch == ')') { --depth; tok += ch; if (depth == 0) break; }
+                else tok += ch;
+            }
         } else {
-            while (i < s.size() && !std::isspace(static_cast<unsigned char>(s[i]))) tok += s[i++];
+            // Collect a bare token, but a " or ( embedded in it starts a
+            // protected run too ("dn=\"cn=x, o=y\"" has the quote mid-token).
+            while (i < s.size() && !std::isspace(static_cast<unsigned char>(s[i]))) {
+                if (s[i] == '"') {
+                    tok += s[i++];
+                    while (i < s.size() && s[i] != '"') tok += s[i++];
+                    if (i < s.size()) { tok += s[i++]; }  // closing quote
+                } else if (s[i] == '(') {
+                    int depth = 0;
+                    while (i < s.size()) {
+                        char ch = s[i++];
+                        if (ch == '(') { ++depth; tok += ch; }
+                        else if (ch == ')') { --depth; tok += ch; if (depth == 0) break; }
+                        else tok += ch;
+                    }
+                } else {
+                    tok += s[i++];
+                }
+            }
         }
         out.push_back(tok);
     }
@@ -126,6 +155,11 @@ bool attrsOverlap(const AclRule &a, const AclRule &b) {
 // Does target A fully cover target B? (attrs AND dn scope)
 bool targetCovers(const AclRule &a, const AclRule &b) {
     if (a.targetComplex || b.targetComplex) return false;
+    // "to entry" / "to children" grant access to the entries themselves,
+    // "to attrs=..." to attributes; they are evaluated independently in both
+    // slapd (entry vs attrs rules) and Oracle OID, so neither covers the other.
+    // Only "to *" (no restriction) spans both.
+    if (a.targetEntry != b.targetEntry) return false;
     bool aAll = a.targetAttrs.empty() || a.targetAttrs[0] == "*";
     bool bAll = b.targetAttrs.empty() || b.targetAttrs[0] == "*";
     if (!aAll && bAll) return false;
@@ -238,13 +272,27 @@ AclRule parseAcl(const std::string &value) {
         while (pos < value.size() && value.find("(version 3.0", pos) != pos) {
             size_t open = value.find('(', pos);
             if (open == std::string::npos) break;
-            size_t close = value.find(')', open);
-            if (close == std::string::npos) break;
+            // Find the matching close: a quoted expression may itself contain
+            // parentheses ("(targetfilter=\"(objectClass=x)\")").
+            size_t close = open + 1;
+            int depth = 1;
+            bool inQuote = false;
+            while (close < value.size() && depth > 0) {
+                char ch = value[close];
+                if (ch == '"') inQuote = !inQuote;
+                else if (!inQuote && ch == '(') ++depth;
+                else if (!inQuote && ch == ')') --depth;
+                ++close;
+            }
+            if (depth > 0) break;
+            --close;
             std::string group = value.substr(open + 1, close - open - 1);
             auto eq = group.find('=');
             if (eq != std::string::npos) {
                 std::string kw = group.substr(0, eq);
                 while (!kw.empty() && kw.back() == ' ') kw.pop_back();
+                bool negated = kw.size() > 0 && kw.back() == '!';
+                while (!kw.empty() && (kw.back() == ' ' || kw.back() == '!')) kw.pop_back();
                 std::string expr = group.substr(eq + 1);
                 while (!expr.empty() && expr.front() == ' ') expr.erase(0, 1);
                 // strip surrounding quotes
@@ -252,6 +300,7 @@ AclRule parseAcl(const std::string &value) {
                     expr = expr.substr(1, expr.size() - 2);
                 if (kw == "targetattr") {
                     // "a || b" → attrs list
+                    if (negated) r.targetComplex = true;
                     size_t s = 0;
                     while (s <= expr.size()) {
                         size_t sep = expr.find("||", s);
@@ -349,6 +398,113 @@ AclRule parseAcl(const std::string &value) {
         }
         if (r.bys.empty()) return AclRule{};
         return r;
+    }
+
+    // ── Oracle OID syntax: "access to entry by * (browse)" ──
+    // Grammar (docs.oracle.com "Access Control Directive Format"):
+    //   access to <object> [modifiers] by <subject> (rights, ...) ...
+    //   object  = entry | attr [!=] ( * | attrlist )
+    //   rights  = browse, add, delete, proxy, compare, read, search, write,
+    //             selfwrite, export, import — each optionally negated (no*)
+    //   subject = * | self | dn="..." | group="..." | dn=".*,dc=..."
+    //   modifiers = DenyGroupOverride | AppendToAll | AppendToExisting |
+    //               filter=(...) | added_object_constraint=(...)
+    {
+        auto otoks = tokenize(value);
+        if (otoks.size() >= 3) {
+            std::string t0 = otoks[0], t1 = otoks[1];
+            for (auto &c : t0) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            for (auto &c : t1) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (t0 == "access" && t1 == "to") {
+                // object
+                size_t i = 2;
+                std::string obj = otoks[i];
+                std::string lowObj = obj;
+                for (auto &c : lowObj) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                ++i;
+                if (lowObj == "entry") {
+                    r.targetEntry = true;
+                    r.target = "entry";
+                } else if (lowObj.rfind("attr", 0) == 0) {
+                    bool neg = obj.find("!=") != std::string::npos;
+                    size_t op = obj.find('(');
+                    size_t cl = obj.rfind(')');
+                    if (op != std::string::npos && cl != std::string::npos && cl > op) {
+                        std::string list = obj.substr(op + 1, cl - op - 1);
+                        r.targetAttrs = parseAttrs(list);
+                        r.target = "attrs=" + list;
+                        if (neg) r.targetComplex = true;
+                    } else {
+                        r.target = obj;
+                        r.targetComplex = true;
+                    }
+                } else {
+                    r.target = obj;
+                    r.targetComplex = true;
+                }
+                // modifiers until the first "by"; kept in the target for
+                // visibility, filter/constraints make the rule complex.
+                while (i < otoks.size() && otoks[i] != "by") {
+                    std::string m = otoks[i];
+                    std::string lm = m;
+                    for (auto &c : lm) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    if (lm.rfind("filter", 0) == 0 ||
+                        lm.rfind("added_object_constraint", 0) == 0 ||
+                        lm.rfind("constrainton", 0) == 0)
+                        r.targetComplex = true;
+                    if (!r.target.empty()) r.target += " " + m;
+                    ++i;
+                }
+                // by-clauses
+                while (i < otoks.size()) {
+                    if (otoks[i] != "by") { ++i; continue; }
+                    ++i;
+                    if (i >= otoks.size()) break;
+                    AclClause c;
+                    c.subject = otoks[i];
+                    ++i;
+                    // strip quotes: dn="cn=x" → dn=cn=x ; group="cn=x" → group/cn=x
+                    std::string subj;
+                    for (char ch : c.subject)
+                        if (ch != '"') subj += ch;
+                    if (subj.rfind("group=", 0) == 0)
+                        subj = "group/" + subj.substr(6);
+                    c.subject = subj;
+                    // rights: "(browse, add)" possibly split across tokens, or
+                    // a bare token (slapd-like "read").
+                    std::string rights;
+                    bool inParen = false;
+                    while (i < otoks.size() && otoks[i] != "by") {
+                        std::string tk = otoks[i];
+                        std::string ltk = tk;
+                        for (auto &c : ltk) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        if (ltk.rfind("added_object_constraint", 0) == 0) {
+                            r.targetComplex = true;
+                            ++i;
+                            continue;
+                        }
+                        if (tk.find('(') != std::string::npos) {
+                            inParen = true;
+                            rights += tk;
+                        } else if (inParen) {
+                            rights += " " + tk;
+                        }
+                        if (tk.find(')') != std::string::npos) {
+                            inParen = false;
+                            ++i;
+                            break;
+                        }
+                        ++i;
+                    }
+                    std::string clean;
+                    for (char ch : rights)
+                        if (ch != '(' && ch != ')') clean += ch;
+                    c.rights = clean.empty() ? "none" : clean;
+                    if (!c.subject.empty()) r.bys.push_back(c);
+                }
+                if (!r.bys.empty()) return r;
+            }
+        }
     }
 
     auto toks = tokenize(value);
@@ -679,23 +835,41 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
     const int nCols = 7;
 
     // Highest access level named in a rights string (manage > write > read >
-    // search > compare > auth); -1 for none/unknown/priv model.
+    // search > compare > auth); -1 for none/unknown/priv model. Oracle OID
+    // rights are mapped onto the slapd levels: browse→search, selfwrite→write,
+    // proxy→manage; negated rights (noadd, nodelete, ...) grant nothing.
     auto colFor = [](const std::string &r) -> int {
         std::string low = r;
         for (auto &c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        // "none" / empty maps to the none column (0); then low→high levels.
-        // "all" (ACI shorthand) equals manage.
         if (low.empty() || low.find("none") != std::string::npos) return 0;
+        // "all" (ACI shorthand) equals manage.
         if (low.find("all") != std::string::npos) return 6;
-        if (low.find("manage") != std::string::npos) return 6;
-        if (low.find("write") != std::string::npos ||
-            low.find("add") != std::string::npos ||
-            low.find("delete") != std::string::npos) return 5;
-        if (low.find("read") != std::string::npos) return 4;
-        if (low.find("search") != std::string::npos) return 3;
-        if (low.find("compare") != std::string::npos) return 2;
-        if (low.find("auth") != std::string::npos) return 1;
-        return 0;  // unknown → none column
+        // Walk the comma-separated rights; a "no" prefix is a denial and does
+        // not grant a level, so it must not match the positive keyword search
+        // below (e.g. "nowrite" must not count as "write").
+        int best = 0;
+        size_t s = 0;
+        while (s <= low.size()) {
+            size_t comma = low.find(',', s);
+            std::string w = low.substr(s, comma == std::string::npos
+                                            ? std::string::npos : comma - s);
+            while (!w.empty() && (w.front() == ' ' || w.front() == '\t')) w.erase(0, 1);
+            while (!w.empty() && (w.back() == ' ' || w.back() == '\t')) w.pop_back();
+            if (!w.empty() && w.rfind("no", 0) != 0) {
+                int lv = 0;
+                if (w == "manage" || w == "proxy") lv = 6;
+                else if (w == "write" || w == "selfwrite" || w == "add" ||
+                         w == "delete" || w == "export" || w == "import") lv = 5;
+                else if (w == "read") lv = 4;
+                else if (w == "browse" || w == "search") lv = 3;
+                else if (w == "compare") lv = 2;
+                else if (w == "auth") lv = 1;
+                if (lv > best) best = lv;
+            }
+            if (comma == std::string::npos) break;
+            s = comma + 1;
+        }
+        return best;
     };
 
     auto padCols = [](const std::string &s, int w) -> std::string {

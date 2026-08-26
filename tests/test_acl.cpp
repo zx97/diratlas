@@ -483,6 +483,65 @@ int main() {
         CHECK(rep.find("✓") != std::string::npos);
     }
 
+    // --- Oracle OID syntax: "access to entry by * (browse)" ---
+    {
+        auto r = parseAcl("access to entry by * (browse)");
+        CHECK(r.targetEntry);
+        CHECK(r.target == "entry");
+        CHECK(r.bys.size() == 1);
+        CHECK(r.bys[0].subject == "*" && r.bys[0].rights == "browse");
+        // attr=(a, b) with spaces + dn with spaces
+        auto r2 = parseAcl("access to attr=(orclstatsflag, orclstatsperiodicity,orcleventlevel) "
+                           "by dn=\"cn=directory manager, o=IMC, c=us\" (browse, add, delete) "
+                           "by * (browse, noadd, nodelete)");
+        CHECK(r2.targetAttrs.size() == 3);
+        CHECK(r2.bys.size() == 2);
+        CHECK(r2.bys[0].subject == "dn=cn=directory manager, o=IMC, c=us");
+        CHECK(r2.bys[0].rights == "browse, add, delete");
+        CHECK(r2.bys[1].rights == "browse, noadd, nodelete");
+        // group= quoted → group/
+        auto r3 = parseAcl("access to attr=(*) by group=\"cn=admins,cn=groups\" (search, read)");
+        CHECK(r3.bys.size() == 1);
+        CHECK(r3.bys[0].subject == "group/cn=admins,cn=groups");
+        // filter= and added_object_constraint → complex
+        auto r4 = parseAcl("access to attr=(*) filter=(objectclass=inetorgperson) by * (read)");
+        CHECK(r4.targetComplex);
+        auto r5 = parseAcl("access to entry by group=\"cn=x\" added_object_constraint=(objectclass=orcluser*) "
+                           "(browse, add) by * (browse)");
+        CHECK(r5.targetComplex);
+        CHECK(r5.bys.size() == 2);
+        // deny/negated rights do not grant a level in the report
+        std::string rep = diratlas::ldapcore::buildAclReport(
+            {parseAcl("access to entry by * (browse, noadd, nodelete)")}, {});
+        CHECK(rep.find("search") != std::string::npos);  // browse → search column
+        // entry and attrs targets do not cover each other
+        auto conflicts = analyzeAclConflicts(parseAclValues({
+            "access to entry by * (browse)",
+            "access to attr=(*) by * (search)",
+        }));
+        CHECK(conflicts.empty());
+    }
+
+    // --- 389 DS / RHDS: nested parens in targetfilter, negated targetattr ---
+    {
+        // targetfilter contains a parenthesised filter "(objectClass=x)" inside
+        // the quoted group; the closing paren of the group must be found by
+        // depth, not by the first ')'
+        auto r = parseAcl("(targetattr=\"*\")(targetfilter=\"(objectClass=nsManagedDomain)\")"
+                          "(version 3.0; acl \"Domain\"; allow (read,search) "
+                          "groupdn=\"ldap:///cn=DomainAdmins,ou=Groups,dc=example,dc=com\";)");
+        CHECK(r.targetComplex);
+        CHECK(r.target.find("objectClass=nsManagedDomain") != std::string::npos);
+        CHECK(r.bys.size() == 1);
+        CHECK(r.bys[0].subject == "group/cn=DomainAdmins,ou=Groups,dc=example,dc=com");
+        // negated targetattr (targetattr != "x") is a complex exclusion
+        auto r2 = parseAcl("(targetattr != \"userPassword\")(version 3.0; acl \"Not pw\"; "
+                           "allow (read) userdn=\"ldap:///anyone\";)");
+        CHECK(r2.targetComplex);
+        CHECK(r2.bys.size() == 1);
+        CHECK(r2.bys[0].subject == "*");  // anyone → *
+    }
+
     if (failures == 0) {
         std::cout << "test_acl: all checks passed" << std::endl;
         return 0;
