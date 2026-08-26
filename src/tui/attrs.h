@@ -37,11 +37,13 @@ struct AttrRow {
     std::string attrName;          ///< Attribute name this toggle belongs to
 };
 
+struct OCSchemaInfo;
+
 /**
  * @brief Determine mandatory attributes for a set of objectClasses by querying the subschema.
  * @return A set of attribute names that are MUST for the given classes.
  */
-std::set<std::string> getMandatoryAttrs(LDAPConn &conn,
+std::set<std::string> getMandatoryAttrs(const OCSchemaInfo &ocInfo,
                                          const std::vector<std::string> &objectClasses);
 
 /**
@@ -77,6 +79,7 @@ std::string objectClassKind(LDAPConn &conn, const std::string &className);
 struct OCSchemaInfo {
     std::map<std::string, int> depths;             ///< Class name → depth (top=0)
     std::map<std::string, std::string> supMap;     ///< Class name → parent class name
+    std::vector<std::string> defs;                 ///< Raw objectClasses definitions
     /** @brief Get depth for a class, defaulting to 99 if unknown. */
     int depth(const std::string &oc) const {
         auto it = depths.find(oc);

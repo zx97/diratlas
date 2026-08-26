@@ -254,34 +254,26 @@ static void parseMAY(const std::string &ocDef, std::set<std::string> &out) {
 /**
  * @brief Determine mandatory attributes for a set of objectClasses by querying the subschema.
  *
- * Fetches the subschemaSubentry from RootDSE, retrieves all objectClass
- * definitions, matches the entry's classes, and collects MUST attributes.
+ * Uses the cached objectClass definitions (ocInfo.defs), matches the
+ * entry's classes, and collects MUST attributes.
  */
-std::set<std::string> getMandatoryAttrs(LDAPConn &conn,
+static std::string parseSchemaName(const std::string &def);
+std::set<std::string> getMandatoryAttrs(const OCSchemaInfo &ocInfo,
                                          const std::vector<std::string> &objectClasses) {
     std::set<std::string> result;
-    if (objectClasses.empty()) return result;
+    if (objectClasses.empty() || ocInfo.defs.empty()) return result;
 
-    // Find subschema entry
-    auto rootDSE = conn.searchOne("", "(objectClass=*)", {"subschemaSubentry"}, false);
-    std::string subschemaDN = rootDSE.getAttr("subschemaSubentry");
-    if (subschemaDN.empty()) return result;
-
-    // Fetch objectClasses from subschema
-    auto subschema = conn.searchOne(subschemaDN, "(objectClass=*)", {"objectClasses"}, false);
-    auto allOCs = subschema.getAttrs("objectClasses");
-
-    // For each objectClass of the entry, find its schema definition
+    // Match the objectClass by its (possibly multi-valued) NAME.
     for (const auto &ocName : objectClasses) {
-        for (const auto &ocDef : allOCs) {
-            // Match NAME 'ocName' or NAME "ocName"
-            std::string needle = " NAME '" + ocName + "'";
-            auto npos = ocDef.find(needle);
-            if (npos == std::string::npos) {
-                needle = " NAME \"" + ocName + "\"";
-                npos = ocDef.find(needle);
-            }
-            if (npos == std::string::npos) continue;
+        std::string lower;
+        for (char c : ocName)
+            lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        for (const auto &ocDef : ocInfo.defs) {
+            std::string name = parseSchemaName(ocDef);
+            std::string nlower;
+            for (char c : name)
+                nlower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (nlower != lower) continue;
             parseMUST(ocDef, result);
             break;
         }
@@ -485,6 +477,7 @@ OCSchemaInfo loadOCSchema(LDAPConn &conn) {
     if (subschemaDN.empty()) return info;
     auto subschema = conn.searchOne(subschemaDN, "(objectClass=*)", {"objectClasses"}, false);
     auto allDefs = subschema.getAttrs("objectClasses");
+    info.defs = allDefs;
     computeOCDepths(allDefs, info.depths, info.supMap);
     return info;
 }

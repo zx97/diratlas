@@ -339,7 +339,7 @@ bool App::init(LDAPConn &conn, const std::string &initFilter,
                                                      {"*", "+"}, false);
                 if (!entry.attributeNames.empty()) {
                     auto objClasses = entry.getAttrs("objectClass");
-                    auto mandatory = getMandatoryAttrs(*conn_, objClasses);
+                    auto mandatory = getMandatoryAttrs(getOCSchema(), objClasses);
                     const auto &ocsi = getOCSchema();
                     attrs_->show(entry, mandatory, &ocsi);
                 }
@@ -356,7 +356,7 @@ bool App::init(LDAPConn &conn, const std::string &initFilter,
     LDAPEntry entry = conn_->searchOne(dn, "(objectClass=*)", {"*", "+"}, false);
     if (!entry.attributeNames.empty()) {
         auto objClasses = entry.getAttrs("objectClass");
-        auto mandatory = getMandatoryAttrs(*conn_, objClasses);
+        auto mandatory = getMandatoryAttrs(getOCSchema(), objClasses);
         const auto &ocsi = getOCSchema();
         attrs_->show(entry, mandatory, &ocsi);
     }
@@ -1143,7 +1143,7 @@ void App::handleKey(int ch) {
                                                  {"*", "+"}, false);
             if (!entry.attributeNames.empty()) {
                 auto objClasses = entry.getAttrs("objectClass");
-                auto mandatory = getMandatoryAttrs(*conn_, objClasses);
+                auto mandatory = getMandatoryAttrs(getOCSchema(), objClasses);
                 const auto &ocsi = getOCSchema();
                 attrs_->show(entry, mandatory, &ocsi);
                 currentDN_ = targetDN;
@@ -1217,7 +1217,7 @@ void App::loadSelectedEntry() {
             if (!cancel_.load()) {
                 if (!entry.attributeNames.empty()) {
                     auto objClasses = entry.getAttrs("objectClass");
-                    pendingMandatory_ = getMandatoryAttrs(*conn_, objClasses);
+                    pendingMandatory_ = getMandatoryAttrs(getOCSchema(), objClasses);
                     pendingOcInfo_ = getOCSchema();
                     pendingEntry_ = std::move(entry);
                     pendingLog_ = dn.empty() ? "RootDSE" : dn;
