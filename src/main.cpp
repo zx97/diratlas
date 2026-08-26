@@ -1386,56 +1386,77 @@ int main(int argc, char **argv) {
             for (int i = 0; i < inner; ++i) std::cout << "\u2500";
             std::cout << "\u2518\n";
         };
-        // Analyse one database's olcAccess list on its own: rules can only
-        // overlap within the same base, never across databases.
-        auto analyseBase = [&](const std::string &label, const std::vector<std::string> &vals,
-                               const std::string &evalDn) {
-            if (vals.empty()) {
-                printSection(label + "  — no olcAccess values");
-                std::cout << "\n";
-                return;
+
+        // Collect every base's rules and conflicts first, so the whole report
+        // shares one table size (the widest rule set) and one box width.
+        struct BaseReport {
+            std::string label;
+            std::vector<diratlas::ldapcore::AclRule> rules;
+            std::vector<diratlas::ldapcore::AclConflict> conflicts;
+            std::string evalDn;
+        };
+        std::vector<BaseReport> bases;
+        {
+            // The -b entry itself carries olcAccess: analyse only that base.
+            std::vector<std::string> vals;
+            auto entry = conn.searchOne(cfg.base, "(objectClass=*)", {"olcAccess"}, false);
+            vals = entry.getAttrs("olcAccess");
+            if (!vals.empty()) {
+                BaseReport br;
+                br.label = cfg.base;
+                br.rules = diratlas::ldapcore::parseAclValues(vals);
+                br.conflicts = diratlas::ldapcore::analyzeAclConflicts(br.rules);
+                br.evalDn = cfg.base;
+                bases.push_back(std::move(br));
+            } else {
+                // -b was a parent (e.g. cn=config): analyse each olcDatabase
+                // child separately, never merging rules across bases.
+                std::vector<diratlas::LDAPEntry> children;
+                conn.search(cfg.base, LDAP_SCOPE_ONELEVEL, "(objectClass=olcDatabaseConfig)",
+                            {"olcAccess"}, false, children);
+                for (const auto &c : children) {
+                    auto cv = c.getAttrs("olcAccess");
+                    if (cv.empty()) continue;
+                    BaseReport br;
+                    br.label = c.dn;
+                    br.rules = diratlas::ldapcore::parseAclValues(cv);
+                    br.conflicts = diratlas::ldapcore::analyzeAclConflicts(br.rules);
+                    br.evalDn = c.dn;
+                    bases.push_back(std::move(br));
+                }
+                if (bases.empty()) {
+                    std::cerr << "No olcAccess values found under " << cfg.base << std::endl;
+                    return 1;
+                }
             }
-            auto rules = diratlas::ldapcore::parseAclValues(vals);
-            auto conflicts = diratlas::ldapcore::analyzeAclConflicts(rules);
-            printSection(label + "  — " + std::to_string(rules.size()) + " olcAccess rules");
-            std::cout << diratlas::ldapcore::buildAclReport(rules, conflicts, cfg.aclGraph);
-            if (conflicts.empty())
+        }
+
+        // Uniform table size across the whole report: compute the widest
+        // subject column and box over all bases via aclReportDimensions.
+        int globalSubjW = -1, globalBoxW = -1;
+        for (const auto &b : bases) {
+            auto d = diratlas::ldapcore::aclReportDimensions(b.rules, b.conflicts, cfg.aclGraph);
+            globalSubjW = std::max(globalSubjW, d.subjW);
+            globalBoxW = std::max(globalBoxW, d.boxW);
+        }
+
+        // Print each base with the uniform dimensions.
+        for (const auto &b : bases) {
+            printSection(b.label + "  — " + std::to_string(b.rules.size()) + " olcAccess rules");
+            std::cout << diratlas::ldapcore::buildAclReport(
+                b.rules, b.conflicts, cfg.aclGraph, globalSubjW, globalBoxW);
+            if (b.conflicts.empty())
                 std::cout << "  No conflicts detected.\n";
             if (!cfg.aclUser.empty()) {
                 std::cout << "  Evaluation (slapacl-style) for " << cfg.aclUser << ":\n";
-                std::cout << "    to " << evalDn << " (entry): "
-                          << diratlas::ldapcore::evaluateAcl(rules, cfg.aclUser, evalDn, "entry") << "\n";
+                std::cout << "    to " << b.evalDn << " (entry): "
+                          << diratlas::ldapcore::evaluateAcl(b.rules, cfg.aclUser, b.evalDn, "entry") << "\n";
                 std::cout << "    to attrs=userPassword: "
-                          << diratlas::ldapcore::evaluateAcl(rules, cfg.aclUser, evalDn, "userPassword") << "\n";
+                          << diratlas::ldapcore::evaluateAcl(b.rules, cfg.aclUser, b.evalDn, "userPassword") << "\n";
                 std::cout << "    to attrs=*: "
-                          << diratlas::ldapcore::evaluateAcl(rules, cfg.aclUser, evalDn, "*") << "\n";
+                          << diratlas::ldapcore::evaluateAcl(b.rules, cfg.aclUser, b.evalDn, "*") << "\n";
             }
             std::cout << "\n";  // blank line between the bases
-        };
-
-        // The -b entry itself carries olcAccess: analyse only that base.
-        std::vector<std::string> vals;
-        auto entry = conn.searchOne(cfg.base, "(objectClass=*)", {"olcAccess"}, false);
-        vals = entry.getAttrs("olcAccess");
-        if (!vals.empty()) {
-            analyseBase(cfg.base, vals, cfg.base);
-        } else {
-            // -b was a parent (e.g. cn=config): analyse each olcDatabase
-            // child separately, never merging rules across bases.
-            std::vector<diratlas::LDAPEntry> children;
-            conn.search(cfg.base, LDAP_SCOPE_ONELEVEL, "(objectClass=olcDatabaseConfig)",
-                        {"olcAccess"}, false, children);
-            bool any = false;
-            for (const auto &c : children) {
-                auto cv = c.getAttrs("olcAccess");
-                if (cv.empty()) continue;
-                analyseBase(c.dn, cv, c.dn);
-                any = true;
-            }
-            if (!any) {
-                std::cerr << "No olcAccess values found under " << cfg.base << std::endl;
-                return 1;
-            }
         }
         return 0;
     }

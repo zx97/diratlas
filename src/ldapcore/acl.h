@@ -79,16 +79,32 @@ std::string buildAclGraph(const std::vector<AclRule> &rules,
 /// raw value is returned as a single line when there is no "by" clause.
 std::vector<std::string> formatAclValueLines(const std::string &value);
 
-/// Build a readable text report of @p rules and their @p conflicts. Rules are
-/// printed one after another ("[n] to ... by ..."), and each conflict is
-/// listed directly under the rule it concerns (the earlier rule in the pair,
-/// or the single rule for grouped UNCERTAIN entries) instead of a separate
-/// index-referenced list. Consecutive rules sharing a branch are separated by
-/// a blank line; when @p withGraph is true, each finding is shown as a graph
-/// edge ("MASKED ──► [n] to ...") under its rule instead of the plain text.
-/// An empty string is returned for an empty rule set.
+/// Table dimensions used by buildAclReport(): the subject column width and
+/// the box width. Callers that render several rule sets in one report can
+/// compute the maxima across all of them and pass them as forcedSubjW /
+/// forcedBoxW to buildAclReport() for a uniform table size.
+struct AclReportSize {
+    int subjW{8};   ///< by-subject column width
+    int boxW{0};    ///< total box width
+};
+
+AclReportSize aclReportDimensions(const std::vector<AclRule> &rules,
+                                  const std::vector<AclConflict> &conflicts = {},
+                                  bool withGraph = false);
+
+/// Build a readable text report of @p rules and their @p conflicts. All rules
+/// are drawn inside one big box: the first rule's title in the top border,
+/// following rules linked by ├─ separators, each rule followed by its
+/// by-clause table (access levels as columns, granted one marked with ✓) and
+/// its conflicts/graph edges as rows of the same box. When @p withGraph is
+/// true, findings are shown as graph edges ("MASKED ──► [n] to ...").
+/// @p forcedSubjW / @p forcedBoxW let the caller impose a uniform table size
+/// across the whole report (see aclReportDimensions()); when negative, the
+/// values are computed from this rule set.
 std::string buildAclReport(const std::vector<AclRule> &rules,
                            const std::vector<AclConflict> &conflicts,
-                           bool withGraph = false);
+                           bool withGraph = false,
+                           int forcedSubjW = -1,
+                           int forcedBoxW = -1);
 
 } // namespace diratlas::ldapcore

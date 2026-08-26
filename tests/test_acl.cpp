@@ -431,7 +431,7 @@ int main() {
         std::string r = diratlas::ldapcore::buildAclReport(rules, {});
         CHECK(r.find("┌─ [1] to attrs=userPassword") != std::string::npos);
         CHECK(r.find("auth") != std::string::npos);
-        CHECK(r.find("mng") != std::string::npos);
+        CHECK(r.find("manage") != std::string::npos);  // full column name
         CHECK(r.find("✓") != std::string::npos);  // at least one check (read)
     }
     // --- buildAclReport: ssf selector is kept with the subject and rights ---

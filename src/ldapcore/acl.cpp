@@ -4,6 +4,7 @@
 #include "acl.h"
 #include "utf8.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <map>
@@ -499,9 +500,66 @@ std::vector<std::string> formatAclValueLines(const std::string &value) {
     return out;
 }
 
+AclReportSize aclReportDimensions(const std::vector<AclRule> &rules,
+                                  const std::vector<AclConflict> &conflicts,
+                                  bool withGraph) {
+    // Right-hand columns of the by-clause table — full access level names.
+    static const struct { const char *name; int w; } cols[] = {
+        {"auth", 4}, {"compare", 7}, {"search", 6},
+        {"read", 4}, {"write", 5}, {"manage", 6},
+    };
+    const int nCols = 6;
+    auto displaySubject = [](const AclClause &cl) -> std::string {
+        return cl.selector.empty() ? cl.subject : cl.selector + " " + cl.subject;
+    };
+    int subjW = 8;
+    int rightsW = 0;
+    for (int c = 0; c < nCols; c++) rightsW += cols[c].w + 1;
+    int titleW = 0;
+    for (size_t i = 0; i < rules.size(); ++i) {
+        for (const auto &cl : rules[i].bys)
+            subjW = std::max(subjW, diratlas::ldapcore::utf8Width(displaySubject(cl)));
+        std::string title = "[" + std::to_string(i + 1) + "] to " + rules[i].target;
+        titleW = std::max(titleW, diratlas::ldapcore::utf8Width(title));
+    }
+    subjW = std::min(subjW, 42);
+    // A short conflict row (e.g. "MASKED rule 2 is fully covered by rule 1")
+    // should fit inside the box; cap long details (grouped UNCERTAIN rule
+    // lists) so one huge line does not inflate every table of the report.
+    int conflictW = 0;
+    auto kindName = [](AclConflictKind k) -> const char * {
+        switch (k) {
+            case AclConflictKind::Masked:  return "MASKED";
+            case AclConflictKind::Overlap: return "OVERLAP";
+            case AclConflictKind::Order:   return "ORDER";
+            default:                       return "UNCERTAIN";
+        }
+    };
+    for (const auto &c : conflicts) {
+        int w = 4 + diratlas::ldapcore::utf8Width(kindName(c.kind));
+        if (withGraph) {
+            if (c.second >= 0 && c.second < static_cast<int>(rules.size()))
+                w += 6 + std::min(60, diratlas::ldapcore::utf8Width(
+                    "[" + std::to_string(c.second + 1) + "] to " +
+                    rules[static_cast<size_t>(c.second)].target));
+            if (!c.detail.empty())
+                w += 4 + std::min(60, diratlas::ldapcore::utf8Width(c.detail));
+        } else {
+            w += 2 + std::min(60, diratlas::ldapcore::utf8Width(c.detail));
+        }
+        conflictW = std::max(conflictW, w);
+    }
+    AclReportSize s;
+    s.subjW = subjW;
+    s.boxW = std::max({titleW + 5, 12 + subjW + rightsW + 4, conflictW + 2});
+    s.boxW = std::min(s.boxW, 110);  // keep one huge detail from bloating all bases
+    return s;
+}
+
 std::string buildAclReport(const std::vector<AclRule> &rules,
                            const std::vector<AclConflict> &conflicts,
-                           bool withGraph) {
+                           bool withGraph,
+                           int forcedSubjW, int forcedBoxW) {
     if (rules.empty()) return "";
     std::string out;
     // Group conflicts by the rule they concern: the earlier rule of the pair
@@ -514,41 +572,6 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
             byRule[static_cast<size_t>(anchor)].push_back(&c);
     }
 
-    // Group consecutive rules by their directory branch (ou=... container,
-    // the tree root, or the catch-all) so a long rule list reads per ACL
-    // section. Rules with distinct targets (dn.exact="", cn=Subschema, ...)
-    // each form a group of one: no separator is drawn for those.
-    auto branchKey = [](const AclRule &r) -> std::string {
-        if (!r.targetDn.empty()) {
-            auto sc = parseDnScope(r.targetDn);
-            std::string dn = sc.second;
-            auto f = dn.find(" filter=");
-            if (f != std::string::npos) dn = dn.substr(0, f);
-            auto ou = dn.find("ou=");
-            if (ou != std::string::npos) {
-                dn = dn.substr(ou);
-                auto comma = dn.find(',');
-                if (comma != std::string::npos) dn = dn.substr(0, comma);
-                return dn;
-            }
-            return dn.empty() ? r.target : dn;
-        }
-        if (!r.targetAttrs.empty()) return "attrs=*";
-        return r.target.empty() ? "(other)" : r.target;
-    };
-
-    // Pre-compute group boundaries so the rule range can be shown in the
-    // separator and single-rule groups skip it entirely.
-    struct Group { std::string branch; size_t first; size_t last; };
-    std::vector<Group> groups;
-    for (size_t i = 0; i < rules.size(); ++i) {
-        std::string branch = branchKey(rules[i]);
-        if (groups.empty() || groups.back().branch != branch)
-            groups.push_back({branch, i, i});
-        else
-            groups.back().last = i;
-    }
-
     auto kindName = [](AclConflictKind k) -> const char * {
         switch (k) {
             case AclConflictKind::Masked:  return "MASKED";
@@ -558,10 +581,11 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
         }
     };
 
-    // Right-hand columns of the by-clause table (access levels, low→high).
+    // Right-hand columns of the by-clause table — full access level names.
     struct Col { const char *name; int w; };
     static const Col cols[] = {
-        {"auth", 4}, {"cmp", 3}, {"srch", 4}, {"read", 4}, {"wrt", 3}, {"mng", 3},
+        {"auth", 4}, {"compare", 7}, {"search", 6},
+        {"read", 4}, {"write", 5}, {"manage", 6},
     };
     const int nCols = 6;
 
@@ -587,94 +611,97 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
         return t;
     };
 
-    for (const auto &g : groups) {
-        for (size_t i = g.first; i <= g.last; ++i) {
-            const auto &r = rules[i];
+    // Displayed subject of a by-clause (selector + subject).
+    auto displaySubject = [](const AclClause &cl) -> std::string {
+        return cl.selector.empty() ? cl.subject : cl.selector + " " + cl.subject;
+    };
 
-            // Subject column width (capped so very long DNs do not explode).
-            // The selector (ssf=..., peername=...) is part of the displayed
-            // subject, so it must count towards the column width.
-            int subjW = 8;
-            for (const auto &cl : r.bys) {
-                std::string s = cl.selector.empty() ? cl.subject
-                                                    : cl.selector + " " + cl.subject;
-                subjW = std::max(subjW, diratlas::ldapcore::utf8Width(s));
-            }
-            if (subjW > 42) subjW = 42;
+    // ── Dimensions ──────────────────────────────────────────────
+    // The whole report (all bases) uses one subject column width and one box
+    // width so every table is the size of the widest one. Callers may pass
+    // the global maxima; otherwise compute them from this rule set (which
+    // already accounts for conflict rows, capped so one huge UNCERTAIN
+    // detail does not inflate every box).
+    int rightsW = 0;
+    for (int c = 0; c < nCols; c++) rightsW += cols[c].w + 1;
+    auto dims = aclReportDimensions(rules, conflicts, withGraph);
+    int subjW = forcedSubjW >= 0 ? std::min(forcedSubjW, 42) : dims.subjW;
+    int tableW = 12 + subjW + rightsW;          // "│  ├─ by " + subject + columns
+    int boxW = forcedBoxW >= 0 ? forcedBoxW : std::max(dims.boxW, tableW + 4);
 
-            // Table inner width: indent + "by " + subject + rights columns.
-            int rightsW = 0;
-            for (int c = 0; c < nCols; c++) rightsW += cols[c].w + 1;
-            int tableW = 8 + subjW + rightsW;  // "  ├─ by " + subject + columns
+    // Conflicts are rows of the box; build each line once for rendering.
+    auto conflictLine = [&](const AclConflict *c, bool last) -> std::string {
+        std::string line = std::string(last ? "\u2514\u2500 " : "\u251C\u2500 ");
+        if (withGraph) {
+            line += std::string(kindName(c->kind)) + " \u2500\u2500\u25BA [" +
+                    std::to_string(c->second + 1) + "] to " +
+                    rules[static_cast<size_t>(c->second)].target;
+            if (!c->detail.empty()) line += "  (" + c->detail + ")";
+        } else {
+            line += "! " + std::string(kindName(c->kind)) + " " + c->detail;
+        }
+        return line;
+    };
 
-            std::string title = "[" + std::to_string(i + 1) + "] to " + r.target;
-            int titleW = diratlas::ldapcore::utf8Width(title);
-            // Top line is "┌─ <title> ─...─┐" = titleW + 5 minimum, so when
-            // the title dominates the table the box must be titleW + 5 wide.
-            int boxW = std::max(titleW + 5, tableW + 4);
+    // ── One big box per base, rules linked by ├─ separators ──────
+    for (size_t i = 0; i < rules.size(); ++i) {
+        const auto &r = rules[i];
+        std::string title = "[" + std::to_string(i + 1) + "] to " + r.target;
+        int tw = diratlas::ldapcore::utf8Width(title);
 
-            // Top border: ┌─ <title> ─...─┐ (a space after the title so the
-            // right border does not stick to the text).
+        // First rule: ┌─ <title> ─...─┐ ; following rules: ├─ <title> ─...─┤
+        if (i == 0) {
             out += "\u250C\u2500 " + title + " ";
-            for (int x = 4 + titleW; x < boxW - 1; x++) out += "\u2500";
+            for (int x = 4 + tw; x < boxW - 1; x++) out += "\u2500";
             out += "\u2510\n";
+        } else {
+            out += "\u251C\u2500 " + title + " ";
+            for (int x = 4 + tw; x < boxW - 1; x++) out += "\u2500";
+            out += "\u2524\n";
+        }
 
-            // Header row with the rights column names.
-            out += "\u2502  \u251C\u2500 by ";
-            out += padCols("", subjW) + " \u2502 ";
+        // Header row with the rights column names.
+        out += "\u2502  \u251C\u2500 by ";
+        out += padCols("", subjW) + " \u2502 ";
+        for (int c = 0; c < nCols; c++)
+            out += padCols(cols[c].name, cols[c].w) + "\u2502";
+        out += "\n";
+
+        // One row per by-clause; the left ├─/└─ links each clause to the
+        // rule, the table marks the granted access level with a check.
+        for (size_t k = 0; k < r.bys.size(); ++k) {
+            const auto &cl = r.bys[k];
+            bool last = (k + 1 == r.bys.size());
+            out += "\u2502  " + std::string(last ? "\u2514\u2500" : "\u251C\u2500") +
+                   " by ";
+            std::string subj = displaySubject(cl);
+            if (diratlas::ldapcore::utf8Width(subj) > subjW)
+                subj = diratlas::ldapcore::utf8Truncate(subj, subjW - 1) + "\u2026";
+            out += padCols(subj, subjW) + " \u2502 ";
+            int ci = colFor(cl.rights);
             for (int c = 0; c < nCols; c++) {
-                out += padCols(cols[c].name, cols[c].w) + "\u2502";
+                std::string cell = (c == ci) ? "\u2713" : "";
+                out += padCols(cell, cols[c].w) + "\u2502";
             }
             out += "\n";
+        }
 
-            // One row per by-clause; the left ├─/└─ links each clause to the
-            // rule, the table marks the granted access level with a check.
-            // A connection selector (ssf=..., peername=..., ...) is shown
-            // before the subject (e.g. "ssf=128 self").
-            for (size_t k = 0; k < r.bys.size(); ++k) {
-                const auto &cl = r.bys[k];
-                bool last = (k + 1 == r.bys.size());
-                out += "\u2502  " + std::string(last ? "\u2514\u2500" : "\u251C\u2500") +
-                       " by ";
-                std::string subj = cl.selector.empty() ? cl.subject
-                                                       : cl.selector + " " + cl.subject;
-                if (diratlas::ldapcore::utf8Width(subj) > subjW)
-                    subj = diratlas::ldapcore::utf8Truncate(subj, subjW - 1) + "\u2026";
-                out += padCols(subj, subjW) + " \u2502 ";
-                int ci = colFor(cl.rights);
-                for (int c = 0; c < nCols; c++) {
-                    // Every rights cell is exactly w+1 columns (w chars for
-                    // the name/check, then the separator), matching the
-                    // header row above.
-                    std::string cell = (c == ci) ? "\u2713" : "";
-                    out += padCols(cell, cols[c].w) + "\u2502";
-                }
-                out += "\n";
-            }
-
-            // Bottom border.
-            out += "\u2514";
-            for (int x = 1; x < boxW - 1; x++) out += "\u2500";
-            out += "\u2518\n";
-
-            // Graph edges (withGraph) or conflict summary under the box.
-            for (size_t k = 0; k < byRule[i].size(); ++k) {
-                const auto *c = byRule[i][k];
-                bool last = (k + 1 == byRule[i].size());
-                if (withGraph) {
-                    out += "      " + std::string(last ? "\u2514\u2500 " : "\u251C\u2500 ");
-                    out += std::string(kindName(c->kind)) + " \u2500\u2500\u25BA [" +
-                           std::to_string(c->second + 1) + "] to " +
-                           rules[static_cast<size_t>(c->second)].target;
-                    if (!c->detail.empty()) out += "  (" + c->detail + ")";
-                    out += "\n";
-                } else {
-                    out += "      " + std::string(last ? "\u2514\u2500 " : "\u251C\u2500 ") + "! " +
-                           std::string(kindName(c->kind)) + " " + c->detail + "\n";
-                }
-            }
+        // Conflicts / graph edges for this rule, drawn as rows of the box.
+        for (size_t k = 0; k < byRule[i].size(); ++k) {
+            bool last = (k + 1 == byRule[i].size());
+            // Keep the conflict row inside the box, at box width.
+            std::string cell = "\u2502  " + conflictLine(byRule[i][k], last);
+            if (diratlas::ldapcore::utf8Width(cell) > boxW - 1)
+                cell = diratlas::ldapcore::utf8Truncate(cell, boxW - 2) + "\u2026";
+            out += cell + padCols("", boxW - 1 - diratlas::ldapcore::utf8Width(cell)) +
+                   "\u2502\n";
         }
     }
+
+    // Bottom border.
+    out += "\u2514";
+    for (int x = 1; x < boxW - 1; x++) out += "\u2500";
+    out += "\u2518\n";
     return out;
 }
 
