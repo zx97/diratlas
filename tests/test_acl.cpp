@@ -269,9 +269,9 @@ int main() {
         bool listsTwo = false, listsCatchAll = false;
         for (const auto &x : c) {
             if (x.kind != AclConflictKind::Uncertain) continue;
-            if (x.detail.find("2") != std::string::npos &&
-                x.detail.find("3") != std::string::npos) listsTwo = true;
-            if (x.detail.find("4") != std::string::npos) listsCatchAll = true;
+            if (x.detail.find("1") != std::string::npos &&
+                x.detail.find("2") != std::string::npos) listsTwo = true;
+            if (x.detail.find("3") != std::string::npos) listsCatchAll = true;
         }
         CHECK(listsTwo);
         CHECK(!listsCatchAll);
@@ -352,8 +352,8 @@ int main() {
         std::string g = buildAclGraph(rules, conflicts);
         CHECK(g.find("(no rules)") == std::string::npos);
         CHECK(g.find("MASKED") != std::string::npos);
-        CHECK(g.find("[2] to *") != std::string::npos);
-        CHECK(g.find("[3] to attrs=userPassword") != std::string::npos);
+        CHECK(g.find("[1] to *") != std::string::npos);
+        CHECK(g.find("[2] to attrs=userPassword") != std::string::npos);
     }
     // --- buildAclGraph: empty rules ---
     {
@@ -384,12 +384,12 @@ int main() {
         });
         auto c = analyzeAclConflicts(rules);
         std::string r = diratlas::ldapcore::buildAclReport(rules, c);
-        CHECK(r.find("[1] to *") != std::string::npos);
-        CHECK(r.find("[2] to attrs=userPassword") != std::string::npos);
+        CHECK(r.find("[0] to *") != std::string::npos);
+        CHECK(r.find("[1] to attrs=userPassword") != std::string::npos);
         // the MASKED conflict is anchored under rule 1 (the earlier rule)
         size_t pos = r.find("MASKED");
         CHECK(pos != std::string::npos);
-        CHECK(r.rfind("[1] to *", pos) < pos);   // rule 1 line is above the conflict
+        CHECK(r.rfind("[0] to *", pos) < pos);   // rule 0 line is above the conflict
         CHECK(r.find("is fully covered") != std::string::npos);
     }
     // --- buildAclReport: branch separators only for multi-rule groups ---
@@ -402,9 +402,9 @@ int main() {
         std::string r = diratlas::ldapcore::buildAclReport(rules, {});
         // no heavy ══ separators; both rules listed in order
         CHECK(r.find("══") == std::string::npos);
-        CHECK(r.find("[1] to dn.subtree=\"ou=People,dc=europa,dc=eu\"") != std::string::npos);
-        CHECK(r.find("[2] to dn.regex=ou=People,dc=(.+),dc=europa,dc=eu attrs=cn") != std::string::npos);
-        CHECK(r.find("[3] to dn.base=\"ou=Groups,dc=europa,dc=eu\"") != std::string::npos);
+        CHECK(r.find("[0] to dn.subtree=\"ou=People,dc=europa,dc=eu\"") != std::string::npos);
+        CHECK(r.find("[1] to dn.regex=ou=People,dc=(.+),dc=europa,dc=eu attrs=cn") != std::string::npos);
+        CHECK(r.find("[2] to dn.base=\"ou=Groups,dc=europa,dc=eu\"") != std::string::npos);
         // tree arrow used for conflicts
         CHECK(r.find("└─ ! ") == std::string::npos);  // no conflicts here
     }
@@ -416,12 +416,12 @@ int main() {
         });
         auto c = analyzeAclConflicts(rules);
         std::string r = diratlas::ldapcore::buildAclReport(rules, c, true);
-        CHECK(r.find("MASKED ──► [2] to attrs=userPassword") != std::string::npos);
-        CHECK(r.find("(rule 2 is fully covered by rule 1)") != std::string::npos);
+        CHECK(r.find("MASKED ──► [1] to attrs=userPassword") != std::string::npos);
+        CHECK(r.find("(rule 1 is fully covered by rule 0)") != std::string::npos);
         CHECK(r.find("✓") != std::string::npos);  // the rights table has a check cell
         // without withGraph: plain conflict text
         std::string r2 = diratlas::ldapcore::buildAclReport(rules, c);
-        CHECK(r2.find("! MASKED rule 2 is fully covered by rule 1") != std::string::npos);
+        CHECK(r2.find("! MASKED rule 1 is fully covered by rule 0") != std::string::npos);
     }
     // --- buildAclReport: rights table with checks ---
     {
@@ -429,7 +429,7 @@ int main() {
             "to attrs=userPassword by self read by anonymous auth by * none",
         });
         std::string r = diratlas::ldapcore::buildAclReport(rules, {});
-        CHECK(r.find("┌─ [1] to attrs=userPassword") != std::string::npos);
+        CHECK(r.find("┌─ [0] to attrs=userPassword") != std::string::npos);
         CHECK(r.find("auth") != std::string::npos);
         CHECK(r.find("manage") != std::string::npos);  // full column name
         CHECK(r.find("✓") != std::string::npos);  // at least one check (read)

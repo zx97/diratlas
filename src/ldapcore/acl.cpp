@@ -357,14 +357,14 @@ std::vector<AclConflict> analyzeAclConflicts(const std::vector<AclRule> &rules) 
             bool bRestricts = !b.targetDn.empty() ||
                               (!b.targetAttrs.empty() && b.targetAttrs[0] != "*");
             if (!bRestricts || !attrsOverlap(rules[idxs.front()], b)) continue;
-            detail += " " + std::to_string(j + 1);
+            detail += " " + std::to_string(j);
             any = true;
         }
         if (!any) continue;
         std::string which = "rules";
         for (size_t k = 0; k < idxs.size(); ++k) {
             if (k) which += ",";
-            which += " " + std::to_string(idxs[k] + 1);
+            which += " " + std::to_string(idxs[k]);
         }
         out.push_back({AclConflictKind::Uncertain,
                        static_cast<int>(idxs.front()),
@@ -390,8 +390,8 @@ std::vector<AclConflict> analyzeAclConflicts(const std::vector<AclRule> &rules) 
                 if (clausesCovered(a, b, bCovered)) {
                     out.push_back({AclConflictKind::Masked,
                                    static_cast<int>(i), static_cast<int>(j),
-                                   "rule " + std::to_string(j + 1) +
-                                   " is fully covered by rule " + std::to_string(i + 1)});
+                                   "rule " + std::to_string(j) +
+                                   " is fully covered by rule " + std::to_string(i)});
                     continue;
                 }
                 // Partially dead: i covers j's target but only some clauses —
@@ -401,8 +401,8 @@ std::vector<AclConflict> analyzeAclConflicts(const std::vector<AclRule> &rules) 
                     out.push_back({AclConflictKind::Order,
                                    static_cast<int>(i), static_cast<int>(j),
                                    "clause '" + b.bys[kb].subject + " " + b.bys[kb].rights +
-                                   "' of rule " + std::to_string(j + 1) +
-                                   " is never reached: rule " + std::to_string(i + 1) +
+                                   "' of rule " + std::to_string(j) +
+                                   " is never reached: rule " + std::to_string(i) +
                                    " matches first"});
                 }
                 continue;
@@ -442,7 +442,7 @@ std::string buildAclGraph(const std::vector<AclRule> &rules,
             outgoing[static_cast<size_t>(c.first)].push_back(&c);
     }
     for (size_t i = 0; i < rules.size(); ++i) {
-        std::string label = "[" + std::to_string(i + 1) + "] to " + rules[i].target;
+        std::string label = "[" + std::to_string(i) + "] to " + rules[i].target;
         if (!rules[i].bys.empty()) {
             label += "  by ";
             for (size_t k = 0; k < rules[i].bys.size(); ++k) {
@@ -465,7 +465,7 @@ std::string buildAclGraph(const std::vector<AclRule> &rules,
                 case AclConflictKind::Order:    out += "ORDER"; break;
                 default:                        out += "UNCERTAIN"; break;
             }
-            out += " ──► [" + std::to_string(c->second + 1) + "] to " +
+            out += " ──► [" + std::to_string(c->second) + "] to " +
                    rules[static_cast<size_t>(c->second)].target + "\n";
         }
     }
@@ -521,7 +521,7 @@ AclReportSize aclReportDimensions(const std::vector<AclRule> &rules,
     for (size_t i = 0; i < rules.size(); ++i) {
         for (const auto &cl : rules[i].bys)
             subjW = std::max(subjW, diratlas::ldapcore::utf8Width(displaySubject(cl)));
-        std::string title = "[" + std::to_string(i + 1) + "] to " + rules[i].target;
+        std::string title = "[" + std::to_string(i) + "] to " + rules[i].target;
         titleW = std::max(titleW, diratlas::ldapcore::utf8Width(title));
     }
     subjW = std::min(subjW, 90);
@@ -542,7 +542,7 @@ AclReportSize aclReportDimensions(const std::vector<AclRule> &rules,
         if (withGraph) {
             if (c.second >= 0 && c.second < static_cast<int>(rules.size()))
                 w += 6 + std::min(60, diratlas::ldapcore::utf8Width(
-                    "[" + std::to_string(c.second + 1) + "] to " +
+                    "[" + std::to_string(c.second) + "] to " +
                     rules[static_cast<size_t>(c.second)].target));
             if (!c.detail.empty())
                 w += 4 + std::min(60, diratlas::ldapcore::utf8Width(c.detail));
@@ -643,7 +643,7 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
         std::string line = std::string(last ? "\u2514\u2500 " : "\u251C\u2500 ");
         if (withGraph) {
             line += std::string(kindName(c->kind)) + " \u2500\u2500\u25BA [" +
-                    std::to_string(c->second + 1) + "] to " +
+                    std::to_string(c->second) + "] to " +
                     rules[static_cast<size_t>(c->second)].target;
             if (!c->detail.empty()) line += "  (" + c->detail + ")";
         } else {
@@ -655,7 +655,7 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
     // ── One big box per base, rules linked by ├─ separators ──────
     for (size_t i = 0; i < rules.size(); ++i) {
         const auto &r = rules[i];
-        std::string title = "[" + std::to_string(i + 1) + "] to " + r.target;
+        std::string title = "[" + std::to_string(i) + "] to " + r.target;
         int tw = diratlas::ldapcore::utf8Width(title);
 
         // First rule: ┌─ <title> ─...─┐ ; following rules: ├─ <title> ─...─┤
