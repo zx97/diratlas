@@ -16,6 +16,8 @@ struct AclClause {
     std::string subject;   ///< "*", "self", "anonymous", "users", "dn=...", ...
     std::string rights;    ///< "none", "auth", "compare", "search", "read",
                            ///< "write", "manage" (may be "read,search" or "+")
+    std::string selector;  ///< optional connection selector: "ssf=128",
+                           ///< "peername=IP=...", "sockurl=ldap://...", etc.
 };
 
 /// One parsed ACL rule: "to <target> by <subject> <rights> ...".

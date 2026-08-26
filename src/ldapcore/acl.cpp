@@ -283,6 +283,23 @@ AclRule parseAcl(const std::string &value) {
         if (toks[i] != "by") { ++i; continue; }
         ++i;
         AclClause c;
+        // Optional connection selector prefix: "ssf=128", "transport_ssf=..",
+        // "tls_ssf=..", "sasl_ssf=..", "peername=IP=...", "sockurl=...",
+        // "sockname=...", "domain=..." — a value token with "=" that is not
+        // a dn=/group=/set= subject. It conditions the clause on the
+        // connection properties (slapd.access(5)).
+        if (i < toks.size() &&
+            (toks[i].rfind("ssf=", 0) == 0 ||
+             toks[i].rfind("transport_ssf=", 0) == 0 ||
+             toks[i].rfind("tls_ssf=", 0) == 0 ||
+             toks[i].rfind("sasl_ssf=", 0) == 0 ||
+             toks[i].rfind("peername=", 0) == 0 ||
+             toks[i].rfind("sockurl=", 0) == 0 ||
+             toks[i].rfind("sockname=", 0) == 0 ||
+             toks[i].rfind("domain=", 0) == 0)) {
+            c.selector = toks[i];
+            ++i;
+        }
         if (i < toks.size()) { c.subject = toks[i]; ++i; }
         if (i < toks.size()) { c.rights = toks[i]; ++i; }
         if (!c.subject.empty() && !c.rights.empty()) {
@@ -587,7 +604,9 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
 
             std::string title = "[" + std::to_string(i + 1) + "] to " + r.target;
             int titleW = diratlas::ldapcore::utf8Width(title);
-            int boxW = std::max(titleW + 4, tableW + 4);
+            // Top line is "┌─ <title> ─...─┐" = titleW + 5 minimum, so when
+            // the title dominates the table the box must be titleW + 5 wide.
+            int boxW = std::max(titleW + 5, tableW + 4);
 
             // Top border: ┌─ <title> ─...─┐ (a space after the title so the
             // right border does not stick to the text).
@@ -605,12 +624,15 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
 
             // One row per by-clause; the left ├─/└─ links each clause to the
             // rule, the table marks the granted access level with a check.
+            // A connection selector (ssf=..., peername=..., ...) is shown
+            // before the subject (e.g. "ssf=128 self").
             for (size_t k = 0; k < r.bys.size(); ++k) {
                 const auto &cl = r.bys[k];
                 bool last = (k + 1 == r.bys.size());
                 out += "\u2502  " + std::string(last ? "\u2514\u2500" : "\u251C\u2500") +
                        " by ";
-                std::string subj = cl.subject;
+                std::string subj = cl.selector.empty() ? cl.subject
+                                                       : cl.selector + " " + cl.subject;
                 if (diratlas::ldapcore::utf8Width(subj) > subjW)
                     subj = diratlas::ldapcore::utf8Truncate(subj, subjW - 1) + "\u2026";
                 out += padCols(subj, subjW) + " \u2502 ";

@@ -434,6 +434,20 @@ int main() {
         CHECK(r.find("mng") != std::string::npos);
         CHECK(r.find("✓") != std::string::npos);  // at least one check (read)
     }
+    // --- buildAclReport: ssf selector is kept with the subject and rights ---
+    {
+        auto r = parseAcl("to * by ssf=128 self write by ssf=64 anonymous auth by * none");
+        CHECK(r.bys.size() == 3);
+        CHECK(r.bys[0].selector == "ssf=128" && r.bys[0].subject == "self" &&
+              r.bys[0].rights == "write");
+        CHECK(r.bys[1].selector == "ssf=64" && r.bys[1].subject == "anonymous" &&
+              r.bys[1].rights == "auth");
+        CHECK(r.bys[2].selector.empty() && r.bys[2].subject == "*" &&
+              r.bys[2].rights == "none");
+        std::string rep = diratlas::ldapcore::buildAclReport({r}, {});
+        CHECK(rep.find("ssf=128 self") != std::string::npos);
+        CHECK(rep.find("ssf=64 anonymous") != std::string::npos);
+    }
 
     if (failures == 0) {
         std::cout << "test_acl: all checks passed" << std::endl;
