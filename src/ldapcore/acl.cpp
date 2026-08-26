@@ -669,11 +669,11 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
             out += "\u2524\n";
         }
 
-        // Header row with the rights column names.
-        // The row body is "│  ├─ by <subj> │ <cols>│"; pad to boxW so the
-        // right border │ closes the box.
+        // Header row with the rights column names. The left part is just the
+        // subject column's continuation ("│  │" padded to the same 9-column
+        // prefix as "│  ├─ by "), not a by-clause, so no ├─ connector.
         {
-            std::string body = "\u2502  \u251C\u2500 by ";
+            std::string body = "\u2502  \u2502     ";
             body += padCols("", subjW) + " \u2502 ";
             for (int c = 0; c < nCols; c++)
                 body += padCols(cols[c].name, cols[c].w) + "\u2502";
