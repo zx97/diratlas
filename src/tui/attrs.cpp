@@ -855,6 +855,7 @@ static bool isSchemaLikeAttr(const std::string &name) {
         "ditcontentrules", "ditstructurerules", "structuralobjectclass",
         "governingstructurerule", "dependson",
         "pwdcheckmodulearg",
+        "aci", "orclentrylevelaci",
     };
     return s.count(name) > 0;
 }
@@ -1003,6 +1004,108 @@ static void drawSchemaValue(WINDOW *win, int y, int x, int maxW,
         }
     }
     }
+
+/**
+ * @brief Whether @p name is an ACL-bearing attribute rendered by drawAclValue.
+ */
+static bool isAclAttr(const std::string &name) {
+    return name == "olcaccess" || name == "aci" || name == "orclentrylevelaci";
+}
+
+/**
+ * @brief Syntax-highlight an ACL value (olcAccess / aci / orclentrylevelaci).
+ *
+ * Semantic colours:
+ *   - "to" / "by" keywords  → bold dark red
+ *   - rights (read/write/manage/auth/...) → green
+ *   - "none" right          → red
+ *   - subject selectors (dn.*, attrs, filter, self, anonymous, users, ...)
+ *                           → yellow
+ *   - quoted strings        → green
+ */
+static void drawAclValue(WINDOW *win, int y, int x, int maxW,
+                         const std::string &val, int defaultColor, attr_t defaultAttr) {
+    static const std::set<std::string> rights = {
+        "read", "write", "manage", "auth", "compare", "search",
+        "add", "delete", "disclose", "proxy",
+    };
+    static const std::set<std::string> selectors = {
+        "dn", "dn.base", "dn.exact", "dn.one", "dn.subtree", "dn.children",
+        "dn.regex", "attrs", "filter", "self", "anonymous", "users",
+        "peers", "sockurl", "set", "expand", "entry", "children", "subentry",
+    };
+    size_t i = 0;
+    int cx = x;
+    while (i < val.size() && cx < x + maxW) {
+        if (val[i] == ' ' || val[i] == '\t') {
+            int ws = 0;
+            while (i + ws < val.size() && (val[i + ws] == ' ' || val[i + ws] == '\t'))
+                ws++;
+            if (cx + ws > x + maxW) ws = x + maxW - cx;
+            cx += ws;
+            i += ws;
+            continue;
+        }
+
+        int color = defaultColor;
+        attr_t attr = defaultAttr;
+        int len = 1;
+
+        if (static_cast<unsigned char>(val[i]) >= 0x80) {
+            int ulen = 0;
+            utf8Decode(val, i, &ulen);
+            len = ulen;
+        } else if (val[i] == '\'' || val[i] == '"') {
+            char q = val[i];
+            color = CP_STATUS_OK;
+            attr = A_NORMAL;
+            auto end = val.find(q, i + 1);
+            len = (end != std::string::npos) ? static_cast<int>(end - i + 1)
+                                             : static_cast<int>(val.size() - i);
+        } else if (val[i] == '{' || val[i] == '}') {
+            color = CP_ATTR_TIME_VERY_OLD;
+            attr = A_DIM;
+            len = 1;
+        } else if (isalnum(val[i]) || val[i] == '.' || val[i] == '-' ||
+                   val[i] == '*' || val[i] == '=') {
+            auto end = val.find_first_of(" \t{}()[],\"", i);
+            if (end == std::string::npos) end = val.size();
+            len = static_cast<int>(end - i);
+            std::string word = val.substr(i, len);
+            if (rights.count(word)) {
+                color = CP_STATUS_OK;
+                attr = A_BOLD;
+            } else if (word == "none") {
+                color = CP_STATUS_ERR;
+                attr = A_BOLD;
+            } else if (selectors.count(word)) {
+                color = CP_ATTR_TIME_OLD;
+                attr = A_NORMAL;
+            } else if (word == "to" || word == "by") {
+                color = CP_ATTR_TIME_VERY_OLD;
+                attr = A_BOLD;
+            }
+        }
+
+        if (len > maxW - (cx - x))
+            len = maxW - (cx - x);
+
+        if (len > 0) {
+            wattron(win, COLOR_PAIR(color) | attr);
+            if (len == 1) {
+                mvwaddch(win, y, cx, val[i]);
+                cx++;
+            } else {
+                mvwaddstr(win, y, cx, val.substr(i, static_cast<size_t>(len)).c_str());
+                cx += utf8Width(val.substr(i, static_cast<size_t>(len)));
+            }
+            wattroff(win, COLOR_PAIR(color) | attr);
+            i += len;
+        } else {
+            i++;
+        }
+    }
+}
 
 /**
  * @brief Render the attributes panel into an ncurses window.
@@ -1170,7 +1273,10 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
             size_t noteOff = row.noteOffset;
 
             if (useSyntaxHL && !seg.empty()) {
-                drawSchemaValue(win, y, nameW + 2, valW, seg, valColor, valAttr);
+                if (isAclAttr(lowerName(row.name)))
+                    drawAclValue(win, y, nameW + 2, valW, seg, valColor, valAttr);
+                else
+                    drawSchemaValue(win, y, nameW + 2, valW, seg, valColor, valAttr);
             } else if (noteOff != std::string::npos && !seg.empty() && segOff + seg.size() > noteOff) {
                 // The value carries an annotated note (e.g. supported* OID
                 // description): render the note in a distinct colour.
