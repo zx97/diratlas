@@ -496,7 +496,9 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
     }
 
     // Group consecutive rules by their directory branch (ou=... container,
-    // the tree root, or the catch-all) so the listing reads per ACL section.
+    // the tree root, or the catch-all) so a long rule list reads per ACL
+    // section. Rules with distinct targets (dn.exact="", cn=Subschema, ...)
+    // each form a group of one: no separator is drawn for those.
     auto branchKey = [](const AclRule &r) -> std::string {
         if (!r.targetDn.empty()) {
             auto sc = parseDnScope(r.targetDn);
@@ -516,35 +518,46 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
         return r.target.empty() ? "(other)" : r.target;
     };
 
-    std::string prevBranch;
+    // Pre-compute group boundaries so the rule range can be shown in the
+    // separator and single-rule groups skip it entirely.
+    struct Group { std::string branch; size_t first; size_t last; };
+    std::vector<Group> groups;
     for (size_t i = 0; i < rules.size(); ++i) {
         std::string branch = branchKey(rules[i]);
-        if (i == 0 || branch != prevBranch) {
-            out += "──────────── " + branch + " ────────────\n\n";
-        }
-        prevBranch = branch;
-
-        out += "[" + std::to_string(i + 1) + "] to " + rules[i].target + "\n";
-        for (const auto &cl : rules[i].bys)
-            out += "      by " + cl.subject + " " + cl.rights + "\n";
-        // Tree branch from the rule down to its conflicts (one per line),
-        // so the reader sees at a glance which rule each finding belongs to.
-        for (size_t k = 0; k < byRule[i].size(); ++k) {
-            const auto *c = byRule[i][k];
-            bool last = (k + 1 == byRule[i].size());
-            out += std::string("      ") + (last ? "└─ " : "├─ ") + "! ";
-            switch (c->kind) {
-                case AclConflictKind::Masked:   out += "MASKED"; break;
-                case AclConflictKind::Overlap:  out += "OVERLAP"; break;
-                case AclConflictKind::Order:    out += "ORDER"; break;
-                default:                        out += "UNCERTAIN"; break;
-            }
-            out += " " + c->detail + "\n";
-        }
-        out += "\n";
+        if (groups.empty() || groups.back().branch != branch)
+            groups.push_back({branch, i, i});
+        else
+            groups.back().last = i;
     }
-    if (!rules.empty())
-        out += "──────────── " + prevBranch + " ────────────\n";
+
+    for (const auto &g : groups) {
+        bool multi = (g.last > g.first);
+        if (multi) {
+            out += "──────────── " + g.branch + " (règles " +
+                   std::to_string(g.first + 1) + "-" + std::to_string(g.last + 1) +
+                   ") ────────────\n\n";
+        }
+        for (size_t i = g.first; i <= g.last; ++i) {
+            out += "[" + std::to_string(i + 1) + "] to " + rules[i].target + "\n";
+            for (const auto &cl : rules[i].bys)
+                out += "      by " + cl.subject + " " + cl.rights + "\n";
+            // Tree branch from the rule down to its conflicts (one per line),
+            // so the reader sees at a glance which rule each finding belongs to.
+            for (size_t k = 0; k < byRule[i].size(); ++k) {
+                const auto *c = byRule[i][k];
+                bool last = (k + 1 == byRule[i].size());
+                out += std::string("      ") + (last ? "└─ " : "├─ ") + "! ";
+                switch (c->kind) {
+                    case AclConflictKind::Masked:   out += "MASKED"; break;
+                    case AclConflictKind::Overlap:  out += "OVERLAP"; break;
+                    case AclConflictKind::Order:    out += "ORDER"; break;
+                    default:                        out += "UNCERTAIN"; break;
+                }
+                out += " " + c->detail + "\n";
+            }
+            out += "\n";
+        }
+    }
     return out;
 }
 

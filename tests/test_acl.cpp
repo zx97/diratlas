@@ -392,17 +392,19 @@ int main() {
         CHECK(r.rfind("[1] to *", pos) < pos);   // rule 1 line is above the conflict
         CHECK(r.find("is fully covered") != std::string::npos);
     }
-    // --- buildAclReport: branch separators ---
+    // --- buildAclReport: branch separators only for multi-rule groups ---
     {
         auto rules = parseAclValues({
-            "to attrs=userPassword by * read",
             "to dn.subtree=\"ou=People,dc=europa,dc=eu\" by users read",
+            "to dn.regex=ou=People,dc=(.+),dc=europa,dc=eu attrs=cn by users read",
             "to dn.base=\"ou=Groups,dc=europa,dc=eu\" by users read",
         });
         std::string r = diratlas::ldapcore::buildAclReport(rules, {});
-        CHECK(r.find("──────────── attrs=* ────────────") != std::string::npos);
-        CHECK(r.find("──────────── ou=People ────────────") != std::string::npos);
-        CHECK(r.find("──────────── ou=Groups ────────────") != std::string::npos);
+        // rules 1-2 share the ou=People branch → one separator with the range
+        CHECK(r.find("──────────── ou=People (règles 1-2) ────────────") != std::string::npos);
+        // single-rule group (ou=Groups) gets no separator
+        CHECK(r.find("──────────── ou=Groups") == std::string::npos);
+        CHECK(r.find("[3] to dn.base=\"ou=Groups,dc=europa,dc=eu\"") != std::string::npos);
         // tree arrow used for conflicts
         CHECK(r.find("└─ ! ") == std::string::npos);  // no conflicts here
     }
