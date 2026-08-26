@@ -445,17 +445,8 @@ static void computeOCDepths(const std::vector<std::string> &allDefs,
     depths["top"] = 0;
 
     for (const auto &def : allDefs) {
-        // Extract NAME
-        auto namePos = def.find(" NAME '");
-        if (namePos == std::string::npos) {
-            namePos = def.find(" NAME \"");
-            if (namePos == std::string::npos) continue;
-        }
-        namePos += 7; // skip " NAME '"
-        auto nameEnd = def.find('\'', namePos);
-        if (nameEnd == std::string::npos) nameEnd = def.find('"', namePos);
-        if (nameEnd == std::string::npos) continue;
-        std::string name = def.substr(namePos, nameEnd - namePos);
+        std::string name = parseSchemaName(def);
+        if (name.empty()) continue;
         std::string sup = parseSUP(def);
         if (!sup.empty()) {
             supMap[name] = sup;
