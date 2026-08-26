@@ -568,6 +568,16 @@ int main() {
         CHECK(r4.bys[0].subject.find(" and ") != std::string::npos);
     }
 
+    // Oracle rules are additive: an earlier "by * (search)" never masks a
+    // later "by * (read)" — both grants combine, so no MASKED conflict.
+    {
+        auto conflicts = analyzeAclConflicts(parseAclValues({
+            "access to attr=(*) by * (search)",
+            "access to attr=(orclstatsflag, orclstatsperiodicity,orcleventlevel) by * (read)",
+        }));
+        CHECK(conflicts.empty());
+    }
+
     if (failures == 0) {
         std::cout << "test_acl: all checks passed" << std::endl;
         return 0;

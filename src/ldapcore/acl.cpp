@@ -715,12 +715,16 @@ std::vector<AclConflict> analyzeAclConflicts(const std::vector<AclRule> &rules) 
     // Pass 2 — fully modelled rules: masking / dead clauses only. Overlap in
     // the literal sense is normal in slapd.access (first match wins); two
     // rules with intersecting targets are not a problem on their own.
+    // Masking is a slapd-only concept: ACI and Oracle OID rules are additive
+    // (every matching rule grants its own rights, so an earlier "by * search"
+    // never masks a later "by * read" — and an explicit "noadd" in a later
+    // rule still applies).
     for (size_t i = 0; i < rules.size(); ++i) {
         const auto &a = rules[i];
-        if (a.targetComplex) continue;
+        if (a.targetComplex || a.format != AclFormat::Slapd) continue;
         for (size_t j = i + 1; j < rules.size(); ++j) {
             const auto &b = rules[j];
-            if (b.targetComplex) continue;
+            if (b.targetComplex || b.format != AclFormat::Slapd) continue;
 
             // Masked: rule j is fully covered by earlier rule i — its target
             // is contained and every by-clause has a matching clause in i, so
