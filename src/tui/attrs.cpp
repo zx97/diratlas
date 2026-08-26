@@ -1409,6 +1409,15 @@ bool AttrsWidget::handleKey(int ch) {
                 goToDN_ = "VIEWB64:" + rows_[selected_].name + "|" + dec;
                 return true;
             }
+            // ACL/ACI values open a structured popup with parsed rules and
+            // conflict analysis instead of the generic full-value popup.
+            {
+                std::string ln = lowerName(rows_[selected_].attrName);
+                if (ln == "olcaccess" || ln == "aci" || ln == "orclentrylevelaci") {
+                    goToDN_ = "ACLVIEW:" + rows_[selected_].attrName;
+                    return true;
+                }
+            }
             // Values with embedded newlines, or that wrap beyond the visible
             // panel, open a full-content popup with a scrollbar.
             const std::string &disp = displayOf(rows_[selected_]);

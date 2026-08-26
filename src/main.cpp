@@ -23,6 +23,7 @@
 #include <unistd.h>
 
 #include "ldap_conn.h"
+#include "ldapcore/acl.h"
 #include "tui/app.h"
 #include "vars.h"
 #include "embedded.hpp"
@@ -233,6 +234,10 @@ struct Config {
     bool persistentSearch = false;
     /// --sync-refresh-only: single sync refresh pass (RFC 4533)
     bool syncRefreshOnly = false;
+    /// --acl-check: analyse olcAccess rules of the -b entry and report conflicts
+    bool aclCheck = false;
+    /// --acl-user <dn>: simulate access for this user (slapacl-style evaluation)
+    std::string aclUser;
     /// --extended-op <oid>[:hex]: generic extended operation request
     std::string extOpSpec;
     // ---- TLS options filled from -o / ldaprc ----
@@ -793,6 +798,8 @@ int main(int argc, char **argv) {
         {"capabilities", optional_argument, nullptr, 0},
         {"persistent-search", no_argument, nullptr, 0},
         {"sync-refresh-only", no_argument, nullptr, 0},
+        {"acl-check",  no_argument, nullptr, 0},
+        {"acl-user",   required_argument, nullptr, 0},
         {"extended-op", required_argument, nullptr, 0},
         {"cli",        no_argument,       nullptr, 0},
         {"doc",        no_argument,       nullptr, 0},
@@ -838,6 +845,8 @@ int main(int argc, char **argv) {
                 else if (name == "capabilities") cfg.capabilities = optarg ? optarg : "supportedCapabilities";
                 else if (name == "persistent-search") cfg.persistentSearch = true;
                 else if (name == "sync-refresh-only") cfg.syncRefreshOnly = true;
+                else if (name == "acl-check") cfg.aclCheck = true;
+                else if (name == "acl-user") cfg.aclUser = optarg;
                 else if (name == "extended-op") cfg.extOpSpec = optarg;
                 else if (name == "doc") { printDocumentation(); return 0; }
                 else if (name == "filter") { cfg.searchFilter = optarg; cfg.filterSet = true; }
@@ -1330,6 +1339,64 @@ int main(int argc, char **argv) {
     }
     conn.defaultRootDN = cfg.base;
     diratlas::dbgLog(diratlas::LDAP_DEBUG_TRACE, "base: " + cfg.base);
+
+    // ── ACL analysis (--acl-check) ──
+    if (cfg.aclCheck) {
+        if (cfg.base.empty()) {
+            std::cerr << "--acl-check needs a base via -b (e.g. olcDatabase={1}mdb,cn=config)" << std::endl;
+            return 1;
+        }
+        std::vector<std::string> vals;
+        auto entry = conn.searchOne(cfg.base, "(objectClass=*)", {"olcAccess"}, false);
+        vals = entry.getAttrs("olcAccess");
+        if (vals.empty()) {
+            std::vector<diratlas::LDAPEntry> children;
+            conn.search(cfg.base, LDAP_SCOPE_ONELEVEL, "(olcAccess=*)",
+                        {"olcAccess"}, false, children);
+            for (const auto &c : children)
+                for (const auto &v : c.getAttrs("olcAccess"))
+                    vals.push_back(v);
+        }
+        if (vals.empty()) {
+            std::cerr << "No olcAccess values found under " << cfg.base << std::endl;
+            return 1;
+        }
+        auto rules = diratlas::ldapcore::parseAclValues(vals);
+        std::cout << "olcAccess rules: " << rules.size() << "\n";
+        for (size_t i = 0; i < rules.size(); ++i) {
+            std::cout << "  [" << (i + 1) << "] to " << rules[i].target << "\n";
+            for (const auto &cl : rules[i].bys)
+                std::cout << "          by " << cl.subject << " " << cl.rights << "\n";
+        }
+        auto conflicts = diratlas::ldapcore::analyzeAclConflicts(rules);
+        if (conflicts.empty()) {
+            std::cout << "No conflicts detected.\n";
+        } else {
+            std::cout << "Conflicts (" << conflicts.size() << "):\n";
+            for (const auto &c : conflicts) {
+                std::cout << "  ";
+                switch (c.kind) {
+                    case diratlas::ldapcore::AclConflictKind::Masked:   std::cout << "MASKED"; break;
+                    case diratlas::ldapcore::AclConflictKind::Overlap:  std::cout << "OVERLAP"; break;
+                    case diratlas::ldapcore::AclConflictKind::Order:    std::cout << "ORDER"; break;
+                    case diratlas::ldapcore::AclConflictKind::Uncertain: std::cout << "UNCERTAIN"; break;
+                    default: std::cout << "?"; break;
+                }
+                std::cout << " rule[" << (c.first + 1) << "]/[" << (c.second + 1) << "] "
+                          << c.detail << "\n";
+            }
+        }
+        if (!cfg.aclUser.empty()) {
+            std::cout << "Evaluation (slapacl-style) for " << cfg.aclUser << ":\n";
+            std::cout << "  to " << cfg.base << " (entry): "
+                      << diratlas::ldapcore::evaluateAcl(rules, cfg.aclUser, cfg.base, "entry") << "\n";
+            std::cout << "  to attrs=userPassword: "
+                      << diratlas::ldapcore::evaluateAcl(rules, cfg.aclUser, cfg.base, "userPassword") << "\n";
+            std::cout << "  to attrs=*: "
+                      << diratlas::ldapcore::evaluateAcl(rules, cfg.aclUser, cfg.base, "*") << "\n";
+        }
+        return 0;
+    }
 
     // ── CLI mode: one-shot query, no TUI ──
     if (cfg.cli) {

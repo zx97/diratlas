@@ -13,6 +13,7 @@
 #include "../ldapcore/bytes.h"
 #include "../ldapcore/dn.h"
 #include "../ldapcore/attrdesc.h"
+#include "../ldapcore/acl.h"
 #include <ncurses.h>
 #include <locale.h>
 #include <langinfo.h>
@@ -1120,7 +1121,34 @@ void App::handleKey(int ch) {
         }
         // Check if a DN was selected for navigation
 
-        if (attrs_->goToDN_.find("VIEWFULL:") == 0) {
+        if (attrs_->goToDN_.find("ACLVIEW:") == 0) {
+            std::string attr = attrs_->goToDN_.substr(8);
+            attrs_->goToDN_.clear();
+            auto rules = diratlas::ldapcore::parseAclValues(attrs_->getAttrValues(attr));
+            auto conflicts = diratlas::ldapcore::analyzeAclConflicts(rules);
+            std::string content;
+            for (size_t i = 0; i < rules.size(); ++i) {
+                if (i) content += "\n";
+                content += "[" + std::to_string(i + 1) + "] to " + rules[i].target;
+                for (const auto &cl : rules[i].bys)
+                    content += "\n      by " + cl.subject + " " + cl.rights;
+            }
+            if (!conflicts.empty()) {
+                content += "\n\nConflicts:";
+                for (const auto &c : conflicts) {
+                    content += "\n  ";
+                    switch (c.kind) {
+                        case diratlas::ldapcore::AclConflictKind::Masked: content += "MASKED"; break;
+                        case diratlas::ldapcore::AclConflictKind::Overlap: content += "OVERLAP"; break;
+                        case diratlas::ldapcore::AclConflictKind::Order: content += "ORDER"; break;
+                        default: content += "UNCERTAIN"; break;
+                    }
+                    content += " rule[" + std::to_string(c.first + 1) + "]/[" +
+                               std::to_string(c.second + 1) + "] " + c.detail;
+                }
+            }
+            showValuePopup("ACL " + attr, content, "", currentDN_);
+        } else if (attrs_->goToDN_.find("VIEWFULL:") == 0) {
             std::string rest = attrs_->goToDN_.substr(9);
             attrs_->goToDN_.clear();
             auto sep = rest.find('|');

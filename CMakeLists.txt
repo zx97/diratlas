@@ -115,6 +115,7 @@ add_executable(diratlas
     src/ldapcore/bytes.cpp
     src/ldapcore/dn.cpp
     src/ldapcore/utf8.cpp
+    src/ldapcore/acl.cpp
     src/ad/flags.cpp
     src/ad/format.cpp
     src/ad/guid.cpp
@@ -245,3 +246,16 @@ target_include_directories(test_utf8 PRIVATE
 target_compile_options(test_utf8 PRIVATE -Wall -Wextra)
 
 add_test(NAME test_utf8 COMMAND test_utf8)
+
+add_executable(test_acl
+    tests/test_acl.cpp
+    src/ldapcore/acl.cpp
+)
+
+target_include_directories(test_acl PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_options(test_acl PRIVATE -Wall -Wextra)
+
+add_test(NAME test_acl COMMAND test_acl)
