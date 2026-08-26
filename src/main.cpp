@@ -1377,13 +1377,15 @@ int main(int argc, char **argv) {
             // Width in display columns, not bytes: the em dash and any
             // non-ASCII char occupy 1 column but several bytes, so using
             // title.size() would make the top border wider than the line.
-            int w = diratlas::ldapcore::utf8Width(title) + 4;
+            // The corners ┌┐/└┘ replace 2 of the ─ so all three lines are
+            // exactly utf8Width(title) + 4 columns wide.
+            int inner = diratlas::ldapcore::utf8Width(title) + 2;
             std::cout << "\u250C";
-            for (int i = 0; i < w; ++i) std::cout << "\u2500";
+            for (int i = 0; i < inner; ++i) std::cout << "\u2500";
             std::cout << "\u2510\n";
             std::cout << "\u2502 " << title << " \u2502\n";
             std::cout << "\u2514";
-            for (int i = 0; i < w; ++i) std::cout << "\u2500";
+            for (int i = 0; i < inner; ++i) std::cout << "\u2500";
             std::cout << "\u2518\n";
         };
         // Analyse one database's olcAccess list on its own: rules can only
