@@ -1375,12 +1375,12 @@ int main(int argc, char **argv) {
         auto analyseBase = [&](const std::string &label, const std::vector<std::string> &vals,
                                const std::string &evalDn) {
             if (vals.empty()) {
-                std::cout << label << ": no olcAccess values\n";
+                std::cout << "\n  " << label << "  — no olcAccess values\n\n";
                 return;
             }
             auto rules = diratlas::ldapcore::parseAclValues(vals);
             auto conflicts = diratlas::ldapcore::analyzeAclConflicts(rules);
-            std::cout << label << ": " << rules.size() << " olcAccess rules\n";
+            std::cout << "\n  " << label << "  — " << rules.size() << " olcAccess rules\n\n";
             std::cout << diratlas::ldapcore::buildAclReport(rules, conflicts, cfg.aclGraph);
             if (conflicts.empty())
                 std::cout << "  No conflicts detected.\n";

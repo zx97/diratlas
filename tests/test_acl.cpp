@@ -400,10 +400,10 @@ int main() {
             "to dn.base=\"ou=Groups,dc=europa,dc=eu\" by users read",
         });
         std::string r = diratlas::ldapcore::buildAclReport(rules, {});
-        // rules 1-2 share the ou=People branch → one framed header with range
-        CHECK(r.find("══ ou=People  (règles 1-2)") != std::string::npos);
-        // single-rule group (ou=Groups) gets no header
-        CHECK(r.find("══ ou=Groups") == std::string::npos);
+        // no heavy ══ separators; both rules listed in order
+        CHECK(r.find("══") == std::string::npos);
+        CHECK(r.find("[1] to dn.subtree=\"ou=People,dc=europa,dc=eu\"") != std::string::npos);
+        CHECK(r.find("[2] to dn.regex=ou=People,dc=(.+),dc=europa,dc=eu attrs=cn") != std::string::npos);
         CHECK(r.find("[3] to dn.base=\"ou=Groups,dc=europa,dc=eu\"") != std::string::npos);
         // tree arrow used for conflicts
         CHECK(r.find("└─ ! ") == std::string::npos);  // no conflicts here

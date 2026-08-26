@@ -81,8 +81,8 @@ std::vector<std::string> formatAclValueLines(const std::string &value);
 /// printed one after another ("[n] to ... by ..."), and each conflict is
 /// listed directly under the rule it concerns (the earlier rule in the pair,
 /// or the single rule for grouped UNCERTAIN entries) instead of a separate
-/// index-referenced list. Multi-rule branches get a framed header with the
-/// rule range; when @p withGraph is true, each finding is shown as a graph
+/// index-referenced list. Consecutive rules sharing a branch are separated by
+/// a blank line; when @p withGraph is true, each finding is shown as a graph
 /// edge ("MASKED ──► [n] to ...") under its rule instead of the plain text.
 /// An empty string is returned for an empty rule set.
 std::string buildAclReport(const std::vector<AclRule> &rules,
