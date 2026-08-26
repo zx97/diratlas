@@ -250,6 +250,7 @@ add_test(NAME test_utf8 COMMAND test_utf8)
 add_executable(test_acl
     tests/test_acl.cpp
     src/ldapcore/acl.cpp
+    src/ldapcore/utf8.cpp
 )
 
 target_include_directories(test_acl PRIVATE

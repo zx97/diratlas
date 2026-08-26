@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Manuel FLURY
 
 #include "acl.h"
+#include "utf8.h"
 
 #include <cctype>
 #include <cstring>
@@ -540,26 +541,107 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
         }
     };
 
+    // Right-hand columns of the by-clause table (access levels, low→high).
+    struct Col { const char *name; int w; };
+    static const Col cols[] = {
+        {"auth", 4}, {"cmp", 3}, {"srch", 4}, {"read", 4}, {"wrt", 3}, {"mng", 3},
+    };
+    const int nCols = 6;
+
+    // Highest access level named in a rights string (manage > write > read >
+    // search > compare > auth); -1 for none/unknown/priv model.
+    auto colFor = [](const std::string &r) -> int {
+        std::string low = r;
+        for (auto &c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (low.find("manage") != std::string::npos) return 5;
+        if (low.find("write") != std::string::npos ||
+            low.find("add") != std::string::npos ||
+            low.find("delete") != std::string::npos) return 4;
+        if (low.find("read") != std::string::npos) return 3;
+        if (low.find("search") != std::string::npos) return 2;
+        if (low.find("compare") != std::string::npos) return 1;
+        if (low.find("auth") != std::string::npos) return 0;
+        return -1;
+    };
+
+    auto padCols = [](const std::string &s, int w) -> std::string {
+        std::string t = s;
+        while (diratlas::ldapcore::utf8Width(t) < w) t += ' ';
+        return t;
+    };
+
     for (const auto &g : groups) {
         for (size_t i = g.first; i <= g.last; ++i) {
-            out += "  [" + std::to_string(i + 1) + "] to " + rules[i].target + "\n";
-            for (const auto &cl : rules[i].bys)
-                out += "      by " + cl.subject + " " + cl.rights + "\n";
-            // Graph edges (withGraph) or conflict summary: drawn under the
-            // rule as a tree so the reader sees at a glance which rule each
-            // finding belongs to, without repeating the rules themselves.
+            const auto &r = rules[i];
+
+            // Subject column width (capped so very long DNs do not explode).
+            int subjW = 8;
+            for (const auto &cl : r.bys)
+                subjW = std::max(subjW, diratlas::ldapcore::utf8Width(cl.subject));
+            if (subjW > 42) subjW = 42;
+
+            // Table inner width: indent + "by " + subject + rights columns.
+            int rightsW = 0;
+            for (int c = 0; c < nCols; c++) rightsW += cols[c].w + 1;
+            int tableW = 8 + subjW + rightsW;  // "  ├─ by " + subject + columns
+
+            std::string title = "[" + std::to_string(i + 1) + "] to " + r.target;
+            int titleW = diratlas::ldapcore::utf8Width(title);
+            int boxW = std::max(titleW + 4, tableW + 4);
+
+            // Top border: ┌─ <title> ─...─┐
+            out += "\u250C\u2500 " + title;
+            for (int x = 3 + titleW; x < boxW - 1; x++) out += "\u2500";
+            out += "\u2510\n";
+
+            // Header row with the rights column names.
+            out += "\u2502  \u251C\u2500 by ";
+            out += padCols("", subjW) + " \u2502 ";
+            for (int c = 0; c < nCols; c++) {
+                out += padCols(cols[c].name, cols[c].w) + "\u2502";
+            }
+            out += "\n";
+
+            // One row per by-clause; the left ├─/└─ links each clause to the
+            // rule, the table marks the granted access level with a check.
+            for (size_t k = 0; k < r.bys.size(); ++k) {
+                const auto &cl = r.bys[k];
+                bool last = (k + 1 == r.bys.size());
+                out += "\u2502  " + std::string(last ? "\u2514\u2500" : "\u251C\u2500") +
+                       " by ";
+                std::string subj = cl.subject;
+                if (diratlas::ldapcore::utf8Width(subj) > subjW)
+                    subj = diratlas::ldapcore::utf8Truncate(subj, subjW - 1) + "\u2026";
+                out += padCols(subj, subjW) + " \u2502 ";
+                int ci = colFor(cl.rights);
+                for (int c = 0; c < nCols; c++) {
+                    // Every rights cell is exactly w+1 columns (w chars for
+                    // the name/check, then the separator), matching the
+                    // header row above.
+                    std::string cell = (c == ci) ? "\u2713" : "";
+                    out += padCols(cell, cols[c].w) + "\u2502";
+                }
+                out += "\n";
+            }
+
+            // Bottom border.
+            out += "\u2514";
+            for (int x = 1; x < boxW - 1; x++) out += "\u2500";
+            out += "\u2518\n";
+
+            // Graph edges (withGraph) or conflict summary under the box.
             for (size_t k = 0; k < byRule[i].size(); ++k) {
                 const auto *c = byRule[i][k];
                 bool last = (k + 1 == byRule[i].size());
                 if (withGraph) {
-                    out += "      " + std::string(last ? "└─ " : "├─ ");
-                    out += std::string(kindName(c->kind)) + " ──► [" +
+                    out += "      " + std::string(last ? "\u2514\u2500 " : "\u251C\u2500 ");
+                    out += std::string(kindName(c->kind)) + " \u2500\u2500\u25BA [" +
                            std::to_string(c->second + 1) + "] to " +
                            rules[static_cast<size_t>(c->second)].target;
                     if (!c->detail.empty()) out += "  (" + c->detail + ")";
                     out += "\n";
                 } else {
-                    out += "      " + std::string(last ? "└─ " : "├─ ") + "! " +
+                    out += "      " + std::string(last ? "\u2514\u2500 " : "\u251C\u2500 ") + "! " +
                            std::string(kindName(c->kind)) + " " + c->detail + "\n";
                 }
             }

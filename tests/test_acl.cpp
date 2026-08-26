@@ -418,9 +418,21 @@ int main() {
         std::string r = diratlas::ldapcore::buildAclReport(rules, c, true);
         CHECK(r.find("MASKED ──► [2] to attrs=userPassword") != std::string::npos);
         CHECK(r.find("(rule 2 is fully covered by rule 1)") != std::string::npos);
+        CHECK(r.find("✓") != std::string::npos);  // the rights table has a check cell
         // without withGraph: plain conflict text
         std::string r2 = diratlas::ldapcore::buildAclReport(rules, c);
         CHECK(r2.find("! MASKED rule 2 is fully covered by rule 1") != std::string::npos);
+    }
+    // --- buildAclReport: rights table with checks ---
+    {
+        auto rules = parseAclValues({
+            "to attrs=userPassword by self read by anonymous auth by * none",
+        });
+        std::string r = diratlas::ldapcore::buildAclReport(rules, {});
+        CHECK(r.find("┌─ [1] to attrs=userPassword") != std::string::npos);
+        CHECK(r.find("auth") != std::string::npos);
+        CHECK(r.find("mng") != std::string::npos);
+        CHECK(r.find("✓") != std::string::npos);  // at least one check (read)
     }
 
     if (failures == 0) {
