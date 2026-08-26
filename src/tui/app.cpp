@@ -1506,13 +1506,16 @@ void App::showValuePopup(const std::string &title, const std::string &content,
                     mvwaddch(stdscr, sy + r, sx + c, ' ');
             wattroff(stdscr, COLOR_PAIR(CP_BORDER) | A_DIM);
 
-            // Opaque popup background (dark) — the panel behind must not bleed
-            // through between the coloured ACL tokens.
-            wattron(stdscr, COLOR_PAIR(CP_HEADER_BG));
+            // Opaque popup background — the panel behind must not bleed through
+            // between the coloured ACL tokens. Uses the terminal background
+            // (A_NORMAL), which matches the transparent (-1) background of
+            // every ACL syntax pair, so tokens and fill stay consistent.
+            wattron(stdscr, A_NORMAL);
             for (int r = 0; r < rows; r++)
                 for (int c = 0; c < cols; c++)
+
                     mvwaddch(stdscr, sy + r, sx + c, ' ');
-            wattroff(stdscr, COLOR_PAIR(CP_HEADER_BG));
+            wattroff(stdscr, A_NORMAL);
 
             // Popup frame in blue, distinct from the content colours.
             wattron(stdscr, COLOR_PAIR(CP_BORDER));
