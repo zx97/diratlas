@@ -592,9 +592,14 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
             const auto &r = rules[i];
 
             // Subject column width (capped so very long DNs do not explode).
+            // The selector (ssf=..., peername=...) is part of the displayed
+            // subject, so it must count towards the column width.
             int subjW = 8;
-            for (const auto &cl : r.bys)
-                subjW = std::max(subjW, diratlas::ldapcore::utf8Width(cl.subject));
+            for (const auto &cl : r.bys) {
+                std::string s = cl.selector.empty() ? cl.subject
+                                                    : cl.selector + " " + cl.subject;
+                subjW = std::max(subjW, diratlas::ldapcore::utf8Width(s));
+            }
             if (subjW > 42) subjW = 42;
 
             // Table inner width: indent + "by " + subject + rights columns.
