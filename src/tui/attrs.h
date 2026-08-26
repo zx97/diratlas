@@ -111,6 +111,15 @@ struct AttrSchemaInfo {
 AttrSchemaInfo loadAttrSchema(LDAPConn &conn);
 
 /**
+ * @brief Syntax-highlight one line of an ACL value (olcAccess/aci) into @p win.
+ *
+ * Semantic colours: to/by bold dark red, rights green, "none" red, subject
+ * selectors yellow, quoted DNs green. Shared with the ACL popup renderer.
+ */
+void drawAclValue(WINDOW *win, int y, int x, int maxW,
+                  const std::string &val, int defaultColor, attr_t defaultAttr);
+
+/**
  * @brief Attribute display panel.
  *
  * Shows all attributes of a selected LDAP entry with sorting,

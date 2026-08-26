@@ -1023,8 +1023,8 @@ static bool isAclAttr(const std::string &name) {
  *                           → yellow
  *   - quoted strings        → green
  */
-static void drawAclValue(WINDOW *win, int y, int x, int maxW,
-                         const std::string &val, int defaultColor, attr_t defaultAttr) {
+void drawAclValue(WINDOW *win, int y, int x, int maxW,
+                  const std::string &val, int defaultColor, attr_t defaultAttr) {
     static const std::set<std::string> rights = {
         "read", "write", "manage", "auth", "compare", "search",
         "add", "delete", "disclose", "proxy",

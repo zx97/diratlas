@@ -1124,30 +1124,38 @@ void App::handleKey(int ch) {
         if (attrs_->goToDN_.find("ACLVIEW:") == 0) {
             std::string attr = attrs_->goToDN_.substr(8);
             attrs_->goToDN_.clear();
-            auto rules = diratlas::ldapcore::parseAclValues(attrs_->getAttrValues(attr));
+            auto vals = attrs_->getAttrValues(attr);
+            auto rules = diratlas::ldapcore::parseAclValues(vals);
             auto conflicts = diratlas::ldapcore::analyzeAclConflicts(rules);
+            // The popup shows the raw ACL values with syntax colours; the full
+            // interpreted report (parsed rules, conflicts, graph, evaluations)
+            // is saved to a file with 's'.
             std::string content;
+            for (size_t v = 0; v < vals.size(); ++v) {
+                if (v) content += "\n";
+                content += vals[v];
+            }
+            std::string report;
             for (size_t i = 0; i < rules.size(); ++i) {
-                if (i) content += "\n";
-                content += "[" + std::to_string(i + 1) + "] to " + rules[i].target;
+                if (i) report += "\n";
+                report += "[" + std::to_string(i + 1) + "] to " + rules[i].target;
                 for (const auto &cl : rules[i].bys)
-                    content += "\n      by " + cl.subject + " " + cl.rights;
+                    report += "\n      by " + cl.subject + " " + cl.rights;
             }
             if (!conflicts.empty()) {
-                content += "\n\nConflicts:";
+                report += "\n\nConflicts:";
                 for (const auto &c : conflicts) {
-                    content += "\n  ";
+                    report += "\n  ";
                     switch (c.kind) {
-                        case diratlas::ldapcore::AclConflictKind::Masked: content += "MASKED"; break;
-                        case diratlas::ldapcore::AclConflictKind::Overlap: content += "OVERLAP"; break;
-                        case diratlas::ldapcore::AclConflictKind::Order: content += "ORDER"; break;
-                        default: content += "UNCERTAIN"; break;
+                        case diratlas::ldapcore::AclConflictKind::Masked: report += "MASKED"; break;
+                        case diratlas::ldapcore::AclConflictKind::Overlap: report += "OVERLAP"; break;
+                        case diratlas::ldapcore::AclConflictKind::Order: report += "ORDER"; break;
+                        default: report += "UNCERTAIN"; break;
                     }
-                    content += " rule[" + std::to_string(c.first + 1) + "]/[" +
-                               std::to_string(c.second + 1) + "] " + c.detail;
+                    report += " rule[" + std::to_string(c.first + 1) + "]/[" +
+                              std::to_string(c.second + 1) + "] " + c.detail;
                 }
             }
-            std::string report = content;
             report += "\n\n" + diratlas::ldapcore::buildAclGraph(rules, conflicts);
             if (!rules.empty()) {
                 std::vector<std::string> users;
@@ -1164,7 +1172,7 @@ void App::handleKey(int ch) {
                               diratlas::ldapcore::evaluateAcl(rules, u, currentDN_, "*") + "\n";
                 }
             }
-            showValuePopup("ACL " + attr, content, "", currentDN_, report);
+            showValuePopup("ACL " + attr, content, "", currentDN_, report, true);
         } else if (attrs_->goToDN_.find("VIEWFULL:") == 0) {
             std::string rest = attrs_->goToDN_.substr(9);
             attrs_->goToDN_.clear();
@@ -1433,7 +1441,7 @@ void App::showHelp() {
 
 void App::showValuePopup(const std::string &title, const std::string &content,
                          const std::string &attrName, const std::string &dn,
-                         const std::string &saveContent) {
+                         const std::string &saveContent, bool aclHighlight) {
     timeout(-1);  // blocking input for the popup
 
     std::string current = content;
@@ -1499,7 +1507,11 @@ void App::showValuePopup(const std::string &title, const std::string &content,
             int fy = sy + 1;
             int lineEnd = std::min<int>(static_cast<int>(lines.size()), scroll + contentH);
             for (int i = scroll; i < lineEnd && fy < sy + rows - 1; i++, fy++) {
-                mvwaddstr(stdscr, fy, sx + 1, lines[i].c_str());
+                if (aclHighlight) {
+                    drawAclValue(stdscr, fy, sx + 1, cols - 2, lines[i], CP_ATTR_VALUE, A_NORMAL);
+                } else {
+                    mvwaddstr(stdscr, fy, sx + 1, lines[i].c_str());
+                }
             }
 
             // Bottom bar: [Edit] button (only when writable) + hints
