@@ -1009,7 +1009,9 @@ static void drawSchemaValue(WINDOW *win, int y, int x, int maxW,
  * @brief Whether @p name is an ACL-bearing attribute rendered by drawAclValue.
  */
 static bool isAclAttr(const std::string &name) {
-    return name == "olcaccess" || name == "aci" || name == "orclentrylevelaci";
+    return name == "olcaccess" || name == "aci" || name == "orclentrylevelaci" ||
+           name == "entryaci" || name == "prescriptiveaci" || name == "subentryaci" ||
+           name == "acientry" || name == "ibm-aci";
 }
 
 /**
@@ -1033,6 +1035,10 @@ void drawAclValue(WINDOW *win, int y, int x, int maxW,
         "dn", "dn.base", "dn.exact", "dn.one", "dn.subtree", "dn.children",
         "dn.regex", "attrs", "filter", "self", "anonymous", "users",
         "peers", "sockurl", "set", "expand", "entry", "children", "subentry",
+        // ACI keywords
+        "target", "targetattr", "targetfilter", "targetscope", "targattrfilters",
+        "userdn", "groupdn", "userattr", "roledn", "dns", "authmethod",
+        "allow", "deny",
     };
     size_t i = 0;
     int cx = x;
@@ -1519,7 +1525,7 @@ bool AttrsWidget::handleKey(int ch) {
             // conflict analysis instead of the generic full-value popup.
             {
                 std::string ln = lowerName(rows_[selected_].attrName);
-                if (ln == "olcaccess" || ln == "aci" || ln == "orclentrylevelaci") {
+                if (isAclAttr(ln)) {
                     goToDN_ = "ACLVIEW:" + rows_[selected_].attrName;
                     return true;
                 }

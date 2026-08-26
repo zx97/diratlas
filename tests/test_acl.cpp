@@ -448,6 +448,41 @@ int main() {
         CHECK(rep.find("ssf=64 anonymous") != std::string::npos);
     }
 
+    // --- ACI syntax (389 DS / Oracle / PingDirectory / ApacheDS) ---
+    {
+        // targetattr + userdn self
+        auto r = parseAcl("(targetattr=\"cn || sn || mail\")(version 3.0; acl \"Read\"; "
+                          "allow (read, search) userdn=\"ldap:///self\";)");
+        CHECK(r.bys.size() == 1);
+        CHECK(r.targetAttrs.size() == 3);
+        CHECK(r.bys[0].subject == "self");
+        CHECK(r.bys[0].rights.find("read") != std::string::npos);
+        // target= + groupdn
+        auto r2 = parseAcl("(target=\"ldap:///ou=People,dc=example,dc=com\")(targetattr=\"*\")"
+                           "(version 3.0; acl \"All\"; allow (all) "
+                           "groupdn=\"ldap:///cn=admins,ou=Groups,dc=example,dc=com\";)");
+        CHECK(r2.bys.size() == 1);
+        CHECK(r2.targetDn == "ou=People,dc=example,dc=com");
+        CHECK(r2.bys[0].subject.rfind("group/", 0) == 0);
+        CHECK(r2.bys[0].rights.find("all") != std::string::npos);
+        // deny → none
+        auto r3 = parseAcl("(version 3.0; acl \"Deny pw\"; deny (write) userattr=\"userPassword\";)");
+        CHECK(r3.bys.size() == 1);
+        CHECK(r3.bys[0].subject.rfind("userattr=", 0) == 0);
+        // targetfilter → complex
+        auto r4 = parseAcl("(targetattr=\"*\")(targetfilter=\"(objectClass=domain)\")"
+                           "(version 3.0; acl \"Dom\"; allow (read) userdn=\"ldap:///anyone\";)");
+        CHECK(r4.targetComplex);
+        CHECK(r4.bys.size() == 1);
+        CHECK(r4.bys[0].subject == "*");  // anyone → *
+        // all maps to the manage column in the report
+        std::string rep = diratlas::ldapcore::buildAclReport(
+            {parseAcl("(targetattr=\"*\")(version 3.0; acl \"All\"; allow (all) userdn=\"ldap:///anyone\";)")},
+            {});
+        CHECK(rep.find("manage") != std::string::npos);
+        CHECK(rep.find("✓") != std::string::npos);
+    }
+
     if (failures == 0) {
         std::cout << "test_acl: all checks passed" << std::endl;
         return 0;

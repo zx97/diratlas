@@ -56,6 +56,9 @@ OpenLDAP tools; GNU long options are also accepted):
 ./build/diratlas -Y EXTERNAL -H ldapi://%2fvar%2frun%2fslapd.sock \
     -b 'olcDatabase={1}mdb,cn=config' --acl-check --acl-graph
     # show each conflict as a graph edge under its rule (MASKED ──► [n] to ...)
+./build/diratlas -x -H ldap://oid.example.com:389 --acl-check -b ''
+    # non-OpenLDAP server: aci / orclentrylevelaci (389 DS, Oracle), entryACI
+    # (ApacheDS), AclEntry (eDirectory), ibm-aci (IBM) are auto-detected
 ```
 
 See `diratlas --help` or `diratlas doc` for the full option reference.
@@ -327,7 +330,8 @@ src/
 │   ├── attrdesc.h/.cpp  AttributeDescription parser (RFC 4512 §2.5.2: type + ;options)
 │   ├── bytes.h/.cpp  hex, base64, LE32, printability, safe int parsing,
 │   │                 LDIF safe-string check
-│   ├── acl.h/.cpp    olcAccess/aci parsing, conflict analysis,
+│   ├── acl.h/.cpp    olcAccess/aci parsing (OpenLDAP, 389 DS, Oracle,
+│   │                 ApacheDS, eDirectory, IBM), conflict analysis,
 │   │                 slapacl-style evaluation (no LDAP dependency,
 │   │                 unit-tested)
 │   ├── utf8.h/.cpp   UTF-8 decode, display width, truncate/wrap by columns
@@ -372,7 +376,7 @@ ctest --test-dir build --output-on-failure
 - When the RootDSE does not expose `namingContexts`, DirAtlas falls back to
   the empty base so the tree still opens; exposed contexts that are not
   readable with the current bind stay visible (marked with ⚠️).
-- **ACL values** (`olcAccess`, `aci`, `orclentrylevelaci`): Enter opens a
+- **ACL values** (`olcAccess`, `aci`, `orclentrylevelaci`, `entryACI`, ...): Enter opens a
   popup showing the raw value with semantic syntax colours; the analysis
   reports real problems only — **masked rules** (never reached because an
   earlier rule covers them), **dead clauses**, and **complex targets**

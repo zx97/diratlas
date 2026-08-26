@@ -227,6 +227,130 @@ bool subjectMatches(const std::string &subject, const std::string &userDN,
 AclRule parseAcl(const std::string &value) {
     AclRule r;
     r.raw = value;
+
+    // ── ACI syntax (389 DS / Oracle / PingDirectory / ApacheDS) ──
+    // (targetattr="a || b")(target="ldap:///dn")(targetfilter="...")(targetscope="subtree")
+    // (version 3.0; acl "name"; allow (read, search) userdn="ldap:///self";)
+    if (value.find("(version 3.0") != std::string::npos ||
+        value.find("acl \"") != std::string::npos) {
+        // Targets: iterate "(keyword = "..." )" groups before the version body.
+        size_t pos = 0;
+        while (pos < value.size() && value.find("(version 3.0", pos) != pos) {
+            size_t open = value.find('(', pos);
+            if (open == std::string::npos) break;
+            size_t close = value.find(')', open);
+            if (close == std::string::npos) break;
+            std::string group = value.substr(open + 1, close - open - 1);
+            auto eq = group.find('=');
+            if (eq != std::string::npos) {
+                std::string kw = group.substr(0, eq);
+                while (!kw.empty() && kw.back() == ' ') kw.pop_back();
+                std::string expr = group.substr(eq + 1);
+                while (!expr.empty() && expr.front() == ' ') expr.erase(0, 1);
+                // strip surrounding quotes
+                if (expr.size() >= 2 && expr.front() == '"' && expr.back() == '"')
+                    expr = expr.substr(1, expr.size() - 2);
+                if (kw == "targetattr") {
+                    // "a || b" → attrs list
+                    size_t s = 0;
+                    while (s <= expr.size()) {
+                        size_t sep = expr.find("||", s);
+                        std::string a = expr.substr(s, sep == std::string::npos
+                                                        ? std::string::npos : sep - s);
+                        while (!a.empty() && (a.front() == ' ' || a.front() == '\t')) a.erase(0, 1);
+                        while (!a.empty() && (a.back() == ' ' || a.back() == '\t')) a.pop_back();
+                        if (!a.empty()) r.targetAttrs.push_back(a);
+                        if (sep == std::string::npos) break;
+                        s = sep + 2;
+                    }
+                    if (!r.target.empty()) r.target += " ";
+                    r.target += "attrs=" + expr;
+                } else if (kw == "target") {
+                    // "ldap:///dn" or "ldap:///..." → DN target
+                    std::string dn = expr;
+                    const std::string prefix = "ldap:///";
+                    if (dn.rfind(prefix, 0) == 0) dn = dn.substr(prefix.size());
+                    r.targetDn = dn;
+                    if (!r.target.empty()) r.target += " ";
+                    r.target += "dn=" + dn;
+                } else if (kw == "targetscope") {
+                    // subtree/onelevel/base → complex DN scope
+                    r.targetComplex = true;
+                    if (!r.target.empty()) r.target += " ";
+                    r.target += "dn.scope=" + expr;
+                } else if (kw == "targetfilter" || kw == "targattrfilters" ||
+                           kw == "targetcontrol") {
+                    r.targetComplex = true;
+                    if (!r.target.empty()) r.target += " ";
+                    r.target += kw + "=" + expr;
+                }
+            }
+            pos = close + 1;
+        }
+        if (r.target.empty()) r.target = "*";
+
+        // Body: one clause per "allow (rights) subject;" / "deny (rights) subject;".
+        size_t body = value.find("(version 3.0");
+        if (body == std::string::npos) body = 0;
+        size_t p = body;
+        while (p < value.size()) {
+            size_t allow = value.find("allow", p);
+            size_t deny = value.find("deny", p);
+            size_t next = std::string::npos;
+            bool isDeny = false;
+            if (allow != std::string::npos && (deny == std::string::npos || allow < deny)) {
+                next = allow; isDeny = false;
+            } else if (deny != std::string::npos) {
+                next = deny; isDeny = true;
+            }
+            if (next == std::string::npos) break;
+            // rights in parentheses: "(read, search)"
+            size_t rp = value.find('(', next);
+            size_t rpEnd = value.find(')', rp);
+            if (rp == std::string::npos || rpEnd == std::string::npos) break;
+            std::string rights = value.substr(rp + 1, rpEnd - rp - 1);
+            // subject until ';' (or end)
+            size_t semi = value.find(';', rpEnd);
+            std::string subject = value.substr(rpEnd + 1,
+                (semi == std::string::npos ? value.size() : semi) - rpEnd - 1);
+            // trim
+            while (!subject.empty() && (subject.front() == ' ' || subject.front() == '\t'))
+                subject.erase(0, 1);
+            while (!subject.empty() && (subject.back() == ' ' || subject.back() == '\t'))
+                subject.pop_back();
+            if (isDeny) {
+                if (!rights.empty()) rights = "none";  // deny = explicit none for that subject
+            }
+            // Normalise the ACI bind rule into a slapd-style subject.
+            std::string subj = subject;
+            const std::string pre = "ldap:///";
+            if (subj.rfind("userdn=", 0) == 0) {
+                subj = subj.substr(7);
+                while (!subj.empty() && (subj.front() == '"' || subj.front() == ' '))
+                    subj.erase(0, 1);
+                while (!subj.empty() && subj.back() == '"') subj.pop_back();
+                if (subj.rfind(pre, 0) == 0) subj = subj.substr(pre.size());
+                if (subj == "anyone" || subj == "all" || subj == "parent") subj = "*";
+            } else if (subj.rfind("groupdn=", 0) == 0) {
+                subj = subj.substr(8);
+                while (!subj.empty() && (subj.front() == '"' || subj.front() == ' '))
+                    subj.erase(0, 1);
+                while (!subj.empty() && subj.back() == '"') subj.pop_back();
+                if (subj.rfind(pre, 0) == 0) subj = subj.substr(pre.size());
+                subj = "group/" + subj;
+            } else if (subj.rfind("userattr=", 0) == 0) {
+                subj = "userattr=" + subj.substr(9);
+            }
+            AclClause c;
+            c.rights = rights.empty() ? "none" : rights;
+            c.subject = subj.empty() ? "*" : subj;
+            r.bys.push_back(c);
+            p = (semi == std::string::npos) ? value.size() : semi + 1;
+        }
+        if (r.bys.empty()) return AclRule{};
+        return r;
+    }
+
     auto toks = tokenize(value);
     // skip the olcAccess numbering prefix ("{0}to * by ..." or "{0} to * by ...")
     if (!toks.empty() && toks[0].size() >= 2 && toks[0][0] == '{') {
@@ -560,7 +684,9 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
         std::string low = r;
         for (auto &c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         // "none" / empty maps to the none column (0); then low→high levels.
+        // "all" (ACI shorthand) equals manage.
         if (low.empty() || low.find("none") != std::string::npos) return 0;
+        if (low.find("all") != std::string::npos) return 6;
         if (low.find("manage") != std::string::npos) return 6;
         if (low.find("write") != std::string::npos ||
             low.find("add") != std::string::npos ||

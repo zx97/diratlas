@@ -235,7 +235,7 @@ struct Config {
     bool persistentSearch = false;
     /// --sync-refresh-only: single sync refresh pass (RFC 4533)
     bool syncRefreshOnly = false;
-    /// --acl-check: analyse olcAccess rules of the -b entry and report conflicts
+    /// --acl-check: analyse ACL rules of the -b entry and report conflicts
     bool aclCheck = false;
     /// --acl-user <dn>: simulate access for this user (slapacl-style evaluation)
     std::string aclUser;
@@ -334,9 +334,11 @@ static void printUsage(const char *prog) {
                << "  --capabilities[=name] Print a RootDSE capability attribute\n"
                << "  --persistent-search   RFC 4533-style persistent search (server-dependent)\n"
                << "  --sync-refresh-only   RFC 4533 sync refreshOnly pass\n"
-               << "  --acl-check           Analyse the olcAccess rules of the -b entry\n"
-               << "                        and report problems: masked rules (never\n"
-               << "                        reached) and complex targets to check manually\n"
+<< "  --acl-check           Analyse the ACL rules of the -b entry\n"
+                << "                        (olcAccess on OpenLDAP, aci / orclentrylevelaci\n"
+                << "                        on 389 DS / Oracle, entryACI on ApacheDS, ...)\n"
+                << "                        and report problems: masked rules (never\n"
+                << "                        reached) and complex targets to check manually\n"
                << "  --acl-user <dn>       With --acl-check: simulate access for this user\n"
                << "                        (slapacl-style, first matching rule wins)\n"
                << "  --acl-graph           With --acl-check: show each conflict as a\n"
@@ -536,10 +538,14 @@ FLAGS (ldapsearch-compatible)
     --extended-op <oid>[:hex]  Generic extended operation
 
   ACL analysis:
-    --acl-check        analyse the olcAccess rules of the -b entry
-                       (cn=config) and report problems: masked rules
-                       (never reached), dead clauses, complex targets
-                       (dn.regex/filter) grouped to check manually
+    --acl-check        analyse the ACL rules of the -b entry and report
+                       problems: masked rules (never reached), dead
+                       clauses, complex targets (dn.regex/filter) grouped
+                       to check manually. ACL attributes are detected by
+                       server flavour: olcAccess (OpenLDAP), aci /
+                       orclentrylevelaci (389 DS / Red Hat / Oracle),
+                       entryACI / prescriptiveACI / subentryACI (ApacheDS),
+                       AclEntry (eDirectory), ibm-aci (IBM SVDS)
     --acl-user <dn>    with --acl-check: simulate access for this user
                        (slapacl-style evaluation; first matching rule
                        and clause wins)
@@ -1368,9 +1374,17 @@ int main(int argc, char **argv) {
 
     // ── ACL analysis (--acl-check) ──
     if (cfg.aclCheck) {
+        // An empty -b means the RootDSE: auto-detect the search base like the
+        // other modes do, so --acl-check works without -b on any server.
         if (cfg.base.empty()) {
-            std::cerr << "--acl-check needs a base via -b (e.g. olcDatabase={1}mdb,cn=config)" << std::endl;
-            return 1;
+            if (conn.findRootDN(cfg.base)) {
+                note("Root DN: " + cfg.base);
+                diratlas::dbgLog(diratlas::LDAP_DEBUG_TRACE, "acl-check base: auto-detected " + cfg.base);
+            } else {
+                cfg.base = "";
+                note("Root DN: <RootDSE> (no namingContexts exposed)");
+            }
+            conn.defaultRootDN = cfg.base;
         }
         // Print a section title framed at column 0 so each analysed base is
         // clearly visible as the root of the rules that follow it.
@@ -1398,35 +1412,73 @@ int main(int argc, char **argv) {
         };
         std::vector<BaseReport> bases;
         {
-            // The -b entry itself carries olcAccess: analyse only that base.
-            std::vector<std::string> vals;
-            auto entry = conn.searchOne(cfg.base, "(objectClass=*)", {"olcAccess"}, false);
-            vals = entry.getAttrs("olcAccess");
-            if (!vals.empty()) {
+            // ACL attributes by flavour:
+            //   OpenLDAP            → olcAccess (in cn=config)
+            //   389 DS / Red Hat     → aci
+            //   Oracle OID / DSEE    → aci, orclentrylevelaci
+            //   ApacheDS             → entryACI, prescriptiveACI, subentryACI
+            //   eDirectory           → AclEntry
+            //   IBM SVDS             → ibm-aci
+            std::vector<std::string> aclAttrs;
+            switch (conn.flavor) {
+                case diratlas::LDAPFlavor::NetscapeLDAP:
+                    aclAttrs = {"aci", "orclentrylevelaci"};
+                    break;
+                case diratlas::LDAPFlavor::EDirectoryLDAP:
+                    aclAttrs = {"AclEntry"};
+                    break;
+                case diratlas::LDAPFlavor::IBMLDAP:
+                    aclAttrs = {"ibm-aci", "aci"};
+                    break;
+                default:  // StandardLDAP / MicrosoftAD / unknown
+                    aclAttrs = {"olcAccess", "aci", "orclentrylevelaci",
+                                "entryACI", "prescriptiveACI", "subentryACI",
+                                "AclEntry", "ibm-aci"};
+                    break;
+            }
+
+            auto pushBase = [&](const std::string &label, const std::vector<std::string> &vals,
+                                const std::string &evalDn) {
+                if (vals.empty()) return false;
                 BaseReport br;
-                br.label = cfg.base;
+                br.label = label;
                 br.rules = diratlas::ldapcore::parseAclValues(vals);
                 br.conflicts = diratlas::ldapcore::analyzeAclConflicts(br.rules);
-                br.evalDn = cfg.base;
+                br.evalDn = evalDn;
                 bases.push_back(std::move(br));
+                return true;
+            };
+
+            // Collect values of every ACL attribute from an entry.
+            auto collectVals = [&](const diratlas::LDAPEntry &e) {
+                std::vector<std::string> vals;
+                for (const auto &a : aclAttrs)
+                    for (const auto &v : e.getAttrs(a))
+                        vals.push_back(v);
+                return vals;
+            };
+
+            // The -b entry itself may carry ACL attributes.
+            auto entry = conn.searchOne(cfg.base, "(objectClass=*)", aclAttrs, false);
+            if (pushBase(cfg.base, collectVals(entry), cfg.base)) {
+                // done — entry carried its own ACLs
             } else {
-                // -b was a parent (e.g. cn=config): analyse each olcDatabase
-                // child separately, never merging rules across bases.
+                // Otherwise look at children: OpenLDAP keeps one olcDatabase per
+                // child; other servers store per-entry aci/... on descendants.
                 std::vector<diratlas::LDAPEntry> children;
-                conn.search(cfg.base, LDAP_SCOPE_ONELEVEL, "(objectClass=olcDatabaseConfig)",
-                            {"olcAccess"}, false, children);
-                for (const auto &c : children) {
-                    auto cv = c.getAttrs("olcAccess");
-                    if (cv.empty()) continue;
-                    BaseReport br;
-                    br.label = c.dn;
-                    br.rules = diratlas::ldapcore::parseAclValues(cv);
-                    br.conflicts = diratlas::ldapcore::analyzeAclConflicts(br.rules);
-                    br.evalDn = c.dn;
-                    bases.push_back(std::move(br));
+                bool childAcls = false;
+                for (const auto &a : aclAttrs) {
+                    std::vector<diratlas::LDAPEntry> ch;
+                    if (!conn.search(cfg.base, LDAP_SCOPE_ONELEVEL,
+                                     "(" + a + "=*)", {a}, false, ch))
+                        continue;
+                    for (const auto &c : ch) {
+                        if (pushBase(c.dn, c.getAttrs(a), c.dn))
+                            childAcls = true;
+                    }
                 }
-                if (bases.empty()) {
-                    std::cerr << "No olcAccess values found under " << cfg.base << std::endl;
+                if (!childAcls) {
+                    std::cerr << "No ACL values found under " << cfg.base << std::endl;
                     return 1;
                 }
             }
@@ -1443,7 +1495,7 @@ int main(int argc, char **argv) {
 
         // Print each base with the uniform dimensions.
         for (const auto &b : bases) {
-            printSection(b.label + "  — " + std::to_string(b.rules.size()) + " olcAccess rules");
+            printSection(b.label + "  — " + std::to_string(b.rules.size()) + " ACL rules");
             std::cout << diratlas::ldapcore::buildAclReport(
                 b.rules, b.conflicts, cfg.aclGraph, globalSubjW, globalBoxW);
             if (b.conflicts.empty())
