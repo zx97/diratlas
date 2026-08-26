@@ -504,27 +504,19 @@ AclReportSize aclReportDimensions(const std::vector<AclRule> &rules,
                                   const std::vector<AclConflict> &conflicts,
                                   bool withGraph) {
     // Right-hand columns of the by-clause table — full access level names,
-    // plus a final "granted" text column showing the exact right string
-    // (e.g. "none", "read") for clarity.
+    // including "none", so every clause has a matching check cell.
     static const struct { const char *name; int w; } cols[] = {
-        {"auth", 4}, {"compare", 7}, {"search", 6},
+        {"none", 4}, {"auth", 4}, {"compare", 7}, {"search", 6},
         {"read", 4}, {"write", 5}, {"manage", 6},
     };
-    const int nCols = 6;
+    const int nCols = 7;
     auto displaySubject = [](const AclClause &cl) -> std::string {
         return cl.selector.empty() ? cl.subject : cl.selector + " " + cl.subject;
     };
+    // The subject column fits the widest subject so the whole DN is shown.
     int subjW = 8;
     int rightsW = 0;
     for (int c = 0; c < nCols; c++) rightsW += cols[c].w + 1;
-    // granted column width: longest right string (capped), min "manage".
-    int grantedW = 6;
-    for (const auto &r : rules)
-        for (const auto &cl : r.bys)
-            grantedW = std::max(grantedW,
-                diratlas::ldapcore::utf8Width(cl.rights.empty() ? "none" : cl.rights));
-    grantedW = std::min(grantedW, 14);
-    rightsW += grantedW + 1;
     int titleW = 0;
     for (size_t i = 0; i < rules.size(); ++i) {
         for (const auto &cl : rules[i].bys)
@@ -532,7 +524,7 @@ AclReportSize aclReportDimensions(const std::vector<AclRule> &rules,
         std::string title = "[" + std::to_string(i + 1) + "] to " + rules[i].target;
         titleW = std::max(titleW, diratlas::ldapcore::utf8Width(title));
     }
-    subjW = std::min(subjW, 42);
+    subjW = std::min(subjW, 90);
     // A short conflict row (e.g. "MASKED rule 2 is fully covered by rule 1")
     // should fit inside the box; cap long details (grouped UNCERTAIN rule
     // lists) so one huge line does not inflate every table of the report.
@@ -591,28 +583,31 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
         }
     };
 
-    // Right-hand columns of the by-clause table — full access level names.
+    // Right-hand columns of the by-clause table — full access level names,
+    // including "none" so every clause has a matching check cell.
     struct Col { const char *name; int w; };
     static const Col cols[] = {
-        {"auth", 4}, {"compare", 7}, {"search", 6},
+        {"none", 4}, {"auth", 4}, {"compare", 7}, {"search", 6},
         {"read", 4}, {"write", 5}, {"manage", 6},
     };
-    const int nCols = 6;
+    const int nCols = 7;
 
     // Highest access level named in a rights string (manage > write > read >
     // search > compare > auth); -1 for none/unknown/priv model.
     auto colFor = [](const std::string &r) -> int {
         std::string low = r;
         for (auto &c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (low.find("manage") != std::string::npos) return 5;
+        // "none" / empty maps to the none column (0); then low→high levels.
+        if (low.empty() || low.find("none") != std::string::npos) return 0;
+        if (low.find("manage") != std::string::npos) return 6;
         if (low.find("write") != std::string::npos ||
             low.find("add") != std::string::npos ||
-            low.find("delete") != std::string::npos) return 4;
-        if (low.find("read") != std::string::npos) return 3;
-        if (low.find("search") != std::string::npos) return 2;
-        if (low.find("compare") != std::string::npos) return 1;
-        if (low.find("auth") != std::string::npos) return 0;
-        return -1;
+            low.find("delete") != std::string::npos) return 5;
+        if (low.find("read") != std::string::npos) return 4;
+        if (low.find("search") != std::string::npos) return 3;
+        if (low.find("compare") != std::string::npos) return 2;
+        if (low.find("auth") != std::string::npos) return 1;
+        return 0;  // unknown → none column
     };
 
     auto padCols = [](const std::string &s, int w) -> std::string {
@@ -634,18 +629,14 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
     // detail does not inflate every box).
     int rightsW = 0;
     for (int c = 0; c < nCols; c++) rightsW += cols[c].w + 1;
-    // granted column width: longest right string (capped), min "manage".
-    int grantedW = 6;
-    for (const auto &r : rules)
-        for (const auto &cl : r.bys)
-            grantedW = std::max(grantedW,
-                diratlas::ldapcore::utf8Width(cl.rights.empty() ? "none" : cl.rights));
-    grantedW = std::min(grantedW, 14);
-    rightsW += grantedW + 1;
     auto dims = aclReportDimensions(rules, conflicts, withGraph);
-    int subjW = forcedSubjW >= 0 ? std::min(forcedSubjW, 42) : dims.subjW;
+    int subjW = forcedSubjW >= 0 ? std::min(forcedSubjW, 90) : dims.subjW;
     int tableW = 12 + subjW + rightsW;          // "│  ├─ by " + subject + columns
-    int boxW = forcedBoxW >= 0 ? forcedBoxW : std::max(dims.boxW, tableW + 4);
+    // boxW must always fit the table built with the actual subjW; a forced
+    // global boxW may have been computed with a narrower subject column, so
+    // re-derive it from the table whenever it is smaller.
+    int boxW = forcedBoxW >= 0 ? std::max(forcedBoxW, tableW + 4)
+                               : std::max(dims.boxW, tableW + 4);
 
     // Conflicts are rows of the box; build each line once for rendering.
     auto conflictLine = [&](const AclConflict *c, bool last) -> std::string {
@@ -679,37 +670,53 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
         }
 
         // Header row with the rights column names.
-        // The row body is "│  ├─ by <subj> │ <cols>│<granted>│"; pad to boxW
-        // so the right border │ closes the box.
+        // The row body is "│  ├─ by <subj> │ <cols>│"; pad to boxW so the
+        // right border │ closes the box.
         {
             std::string body = "\u2502  \u251C\u2500 by ";
             body += padCols("", subjW) + " \u2502 ";
             for (int c = 0; c < nCols; c++)
                 body += padCols(cols[c].name, cols[c].w) + "\u2502";
-            body += padCols("granted", grantedW) + "\u2502";
             out += body + padCols("", boxW - 1 - diratlas::ldapcore::utf8Width(body)) +
                    "\u2502\n";
         }
 
-        // One row per by-clause; the left ├─/└─ links each clause to the
-        // rule, the table marks the granted access level with a check.
+        // One row per by-clause; the left ├─/└─ links each clause to the rule,
+        // the table marks the granted access level with a check. Subjects
+        // wider than the column wrap onto a continuation line so the whole
+        // DN stays visible.
         for (size_t k = 0; k < r.bys.size(); ++k) {
             const auto &cl = r.bys[k];
             bool last = (k + 1 == r.bys.size());
-            std::string body = "\u2502  " + std::string(last ? "\u2514\u2500" : "\u251C\u2500") +
-                               " by ";
+            std::string conn = std::string(last ? "\u2514\u2500" : "\u251C\u2500");
             std::string subj = displaySubject(cl);
-            if (diratlas::ldapcore::utf8Width(subj) > subjW)
-                subj = diratlas::ldapcore::utf8Truncate(subj, subjW - 1) + "\u2026";
-            body += padCols(subj, subjW) + " \u2502 ";
+            int sw = diratlas::ldapcore::utf8Width(subj);
             int ci = colFor(cl.rights);
+
+            // Row: "│  <conn> by <subj> │ <cells>│" padded to boxW.
+            std::string line1 = "\u2502  " + conn + " by ";
+            std::string remainder;
+            if (sw <= subjW) {
+                line1 += padCols(subj, subjW) + " \u2502 ";
+            } else {
+                // Wrap: first line shows the beginning, continuation line
+                // carries the rest, indented under the "by " prefix.
+                line1 += diratlas::ldapcore::utf8Truncate(subj, subjW - 1) + "\u2026" +
+                         " \u2502 ";
+                remainder = subj.substr(diratlas::ldapcore::utf8Truncate(
+                    subj, subjW - 1).size());
+            }
             for (int c = 0; c < nCols; c++) {
                 std::string cell = (c == ci) ? "\u2713" : "";
-                body += padCols(cell, cols[c].w) + "\u2502";
+                line1 += padCols(cell, cols[c].w) + "\u2502";
             }
-            body += padCols(cl.rights.empty() ? "none" : cl.rights, grantedW) + "\u2502";
-            out += body + padCols("", boxW - 1 - diratlas::ldapcore::utf8Width(body)) +
+            out += line1 + padCols("", boxW - 1 - diratlas::ldapcore::utf8Width(line1)) +
                    "\u2502\n";
+            if (!remainder.empty()) {
+                std::string line2 = "\u2502  \u2502   " + remainder;
+                out += line2 + padCols("", boxW - 1 - diratlas::ldapcore::utf8Width(line2)) +
+                       "\u2502\n";
+            }
         }
 
         // Conflicts / graph edges for this rule, drawn as rows of the box.
