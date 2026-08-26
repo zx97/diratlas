@@ -339,7 +339,8 @@ static void printUsage(const char *prog) {
                << "                        reached) and complex targets to check manually\n"
                << "  --acl-user <dn>       With --acl-check: simulate access for this user\n"
                << "                        (slapacl-style, first matching rule wins)\n"
-               << "  --acl-graph           With --acl-check: print the rule-relation graph\n"
+               << "  --acl-graph           With --acl-check: show each conflict as a\n"
+               << "                        graph edge under its rule\n"
                << "  --extended-op <oid>[:hex]  Generic extended operation\n\n"
               << "DirAtlas TUI options (default mode):\n"
               << "  --emojis              Prefix tree nodes with emojis\n"
@@ -542,8 +543,8 @@ FLAGS (ldapsearch-compatible)
     --acl-user <dn>    with --acl-check: simulate access for this user
                        (slapacl-style evaluation; first matching rule
                        and clause wins)
-    --acl-graph        with --acl-check: print the rule-relation graph
-                       (which rule affects which later rule)
+    --acl-graph        with --acl-check: show each conflict as a graph
+                       edge under its rule (MASKED ──► [n] to ...)
 
 ───────────────────────────────────────────────────────────────
 KEYBOARD

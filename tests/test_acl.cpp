@@ -9,7 +9,7 @@
 
 using diratlas::ldapcore::AclConflictKind;
 using diratlas::ldapcore::analyzeAclConflicts;
-using diratlas::ldapcore::buildAclGraph;
+using diratlas::ldapcore::buildAclReport;
 using diratlas::ldapcore::evaluateAcl;
 using diratlas::ldapcore::parseAcl;
 using diratlas::ldapcore::parseAclValues;
@@ -341,7 +341,7 @@ int main() {
         CHECK(evaluateAcl(rules, "uid=bob,ou=people,dc=x", "cn=config", "*") == "none");
     }
 
-    // --- buildAclGraph: edges labelled with the conflict kind ---
+    // --- buildAclReport withGraph: edges labelled with the conflict kind ---
     {
         auto rules = parseAclValues({
             "to * by * read",
@@ -349,16 +349,15 @@ int main() {
             "to attrs=userPassword by * write",
         });
         auto conflicts = analyzeAclConflicts(rules);
-        std::string g = buildAclGraph(rules, conflicts);
-        CHECK(g.find("(no rules)") == std::string::npos);
+        std::string g = buildAclReport(rules, conflicts, true);
         CHECK(g.find("MASKED") != std::string::npos);
         CHECK(g.find("[1] to *") != std::string::npos);
         CHECK(g.find("[2] to attrs=userPassword") != std::string::npos);
     }
-    // --- buildAclGraph: empty rules ---
+    // --- buildAclReport: empty rules ---
     {
-        std::string g = buildAclGraph({}, {});
-        CHECK(g.find("(no rules)") != std::string::npos);
+        std::string g = buildAclReport({}, {});
+        CHECK(g.empty());
     }
 
     // --- formatAclValueLines: one line per clause, quotes preserved ---

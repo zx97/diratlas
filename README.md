@@ -55,7 +55,7 @@ OpenLDAP tools; GNU long options are also accepted):
     # slapacl-style evaluation: which rule/clause actually grants this user
 ./build/diratlas -Y EXTERNAL -H ldapi://%2fvar%2frun%2fslapd.sock \
     -b 'olcDatabase={1}mdb,cn=config' --acl-check --acl-graph
-    # also print the rule-relation graph (which rule affects which later rule)
+    # show each conflict as a graph edge under its rule (MASKED ──► [n] to ...)
 ```
 
 See `diratlas --help` or `diratlas doc` for the full option reference.

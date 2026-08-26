@@ -431,47 +431,6 @@ std::string evaluateAcl(const std::vector<AclRule> &rules,
     return "none";
 }
 
-std::string buildAclGraph(const std::vector<AclRule> &rules,
-                          const std::vector<AclConflict> &conflicts) {
-    if (rules.empty()) return "  (no rules)\n";
-    std::string out = "  Rule graph (first-match order; each rule shows the later\n";
-    out += "  rules it affects):\n";
-    std::vector<std::vector<const AclConflict *>> outgoing(rules.size());
-    for (const auto &c : conflicts) {
-        if (c.first >= 0 && c.first < static_cast<int>(rules.size()))
-            outgoing[static_cast<size_t>(c.first)].push_back(&c);
-    }
-    for (size_t i = 0; i < rules.size(); ++i) {
-        std::string label = "[" + std::to_string(i) + "] to " + rules[i].target;
-        if (!rules[i].bys.empty()) {
-            label += "  by ";
-            for (size_t k = 0; k < rules[i].bys.size(); ++k) {
-                if (k) label += ", ";
-                label += rules[i].bys[k].subject + " " + rules[i].bys[k].rights;
-            }
-        }
-        if (outgoing[i].empty()) {
-            out += "  " + label + "  (no outgoing relations)\n";
-            continue;
-        }
-        out += "  " + label + "\n";
-        for (size_t k = 0; k < outgoing[i].size(); ++k) {
-            const auto *c = outgoing[i][k];
-            bool last = (k + 1 == outgoing[i].size());
-            out += last ? "   └─ " : "   ├─ ";
-            switch (c->kind) {
-                case AclConflictKind::Masked:   out += "MASKED"; break;
-                case AclConflictKind::Overlap:  out += "OVERLAP"; break;
-                case AclConflictKind::Order:    out += "ORDER"; break;
-                default:                        out += "UNCERTAIN"; break;
-            }
-            out += " ──► [" + std::to_string(c->second) + "] to " +
-                   rules[static_cast<size_t>(c->second)].target + "\n";
-        }
-    }
-    return out;
-}
-
 std::vector<std::string> formatAclValueLines(const std::string &value) {
     std::vector<std::string> out;
     // Split on " by " outside double quotes: the first part is the "to"
@@ -500,6 +459,12 @@ std::vector<std::string> formatAclValueLines(const std::string &value) {
     return out;
 }
 
+// Displayed subject of a by-clause: an optional connection selector (ssf=...,
+// peername=...) is shown before the subject (e.g. "ssf=128 self").
+static std::string displaySubject(const AclClause &cl) {
+    return cl.selector.empty() ? cl.subject : cl.selector + " " + cl.subject;
+}
+
 AclReportSize aclReportDimensions(const std::vector<AclRule> &rules,
                                   const std::vector<AclConflict> &conflicts,
                                   bool withGraph) {
@@ -510,9 +475,6 @@ AclReportSize aclReportDimensions(const std::vector<AclRule> &rules,
         {"read", 4}, {"write", 5}, {"manage", 6},
     };
     const int nCols = 7;
-    auto displaySubject = [](const AclClause &cl) -> std::string {
-        return cl.selector.empty() ? cl.subject : cl.selector + " " + cl.subject;
-    };
     // The subject column fits the widest subject so the whole DN is shown.
     int subjW = 8;
     int rightsW = 0;
@@ -617,9 +579,6 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
     };
 
     // Displayed subject of a by-clause (selector + subject).
-    auto displaySubject = [](const AclClause &cl) -> std::string {
-        return cl.selector.empty() ? cl.subject : cl.selector + " " + cl.subject;
-    };
 
     // ── Dimensions ──────────────────────────────────────────────
     // The whole report (all bases) uses one subject column width and one box
