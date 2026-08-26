@@ -32,7 +32,10 @@ int utf8Width(const std::string &s) {
     while (i < s.size()) {
         int l = 0;
         int cw = wcwidth(static_cast<wchar_t>(utf8Decode(s, i, &l)));
-        if (cw > 0) w += cw;
+        // wcwidth returns -1 for printable chars the C locale does not know
+        // (box-drawing, em dash, ...); they still occupy 1 terminal column.
+        if (cw < 0) cw = 1;
+        w += cw;
         i += static_cast<size_t>(l);
     }
     return w;
@@ -45,9 +48,10 @@ std::string utf8Truncate(const std::string &s, int maxCols) {
     while (i < s.size()) {
         int len = 0;
         int cw = wcwidth(static_cast<wchar_t>(utf8Decode(s, i, &len)));
-        if (cw > 0 && cols + cw > maxCols) break;
+        if (cw < 0) cw = 1;
+        if (cols + cw > maxCols) break;
         i += static_cast<size_t>(len);
-        if (cw > 0) cols += cw;
+        cols += cw;
     }
     return s.substr(0, i);
 }
@@ -62,9 +66,10 @@ std::vector<std::string> utf8Wrap(const std::string &s, int maxCols) {
         while (i < s.size()) {
             int len = 0;
             int cw = wcwidth(static_cast<wchar_t>(utf8Decode(s, i, &len)));
-            if (cw > 0 && cols + cw > maxCols && cols > 0) break;
+            if (cw < 0) cw = 1;
+            if (cols + cw > maxCols && cols > 0) break;
             line.append(s, i, static_cast<size_t>(len));
-            if (cw > 0) cols += cw;
+            cols += cw;
             i += static_cast<size_t>(len);
         }
         out.push_back(line);

@@ -1374,16 +1374,14 @@ int main(int argc, char **argv) {
         // Print a section title framed at column 0 so each analysed base is
         // clearly visible as the root of the rules that follow it.
         auto printSection = [](const std::string &title) {
-            // Width in display columns, not bytes: the em dash and any
-            // non-ASCII char occupy 1 column but several bytes, so using
-            // title.size() would make the top border wider than the line.
-            // The corners ┌┐/└┘ replace 2 of the ─ so all three lines are
-            // exactly utf8Width(title) + 4 columns wide.
-            int inner = diratlas::ldapcore::utf8Width(title) + 2;
+            // Border width is measured in display columns (utf8Width), not
+            // bytes. The title line "│  t  │" is utf8Width(t)+6 wide; the
+            // border's two corners replace 2 dashes, so inner = utf8Width(t)+4.
+            int inner = diratlas::ldapcore::utf8Width(title) + 4;
             std::cout << "\u250C";
             for (int i = 0; i < inner; ++i) std::cout << "\u2500";
             std::cout << "\u2510\n";
-            std::cout << "\u2502 " << title << " \u2502\n";
+            std::cout << "\u2502  " << title << "  \u2502\n";
             std::cout << "\u2514";
             for (int i = 0; i < inner; ++i) std::cout << "\u2500";
             std::cout << "\u2518\n";
