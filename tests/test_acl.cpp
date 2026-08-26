@@ -542,6 +542,31 @@ int main() {
         CHECK(r2.bys[0].subject == "*");  // anyone → *
     }
 
+    // --- RHDS: repeated targetattr, parenthesised bind rules, roledn, booleans ---
+    {
+        // repeated targetattr keyword: (targetattr="a" || targetattr="b" || ...)
+        auto r = parseAcl("(targetattr=\"sn\" || targetattr=\"givenName\" || "
+                          "targetattr = \"telephoneNumber\")(version 3.0; acl \"Names\"; "
+                          "allow (read, search) userdn = \"ldap:///anyone\";)");
+        CHECK(r.targetAttrs.size() == 3);
+        CHECK(r.targetAttrs[0] == "sn" && r.targetAttrs[2] == "telephoneNumber");
+        CHECK(r.target == "attrs=sn,givenName,telephoneNumber");
+        CHECK(r.bys[0].subject == "*");  // anyone → *
+        // parenthesised bind rule "(userdn = \"ldap:///self\")" → self
+        auto r2 = parseAcl("(target = \"ldap:///ou=People,dc=example,dc=com\")"
+                           "(version 3.0; acl \"Own\"; allow (search, read) "
+                           "(userdn = \"ldap:///self\");)");
+        CHECK(r2.bys[0].subject == "self");
+        // roledn → role/
+        auto r3 = parseAcl("(targetattr=\"manager\")(version 3.0; acl \"Role\"; "
+                           "allow (search, read) roledn = \"ldap:///cn=HR,ou=People,dc=x\";)");
+        CHECK(r3.bys[0].subject == "role/cn=HR,ou=People,dc=x");
+        // compound bind rule (and/or) is kept raw, not split
+        auto r4 = parseAcl("(targetattr = \"userPassword\")(version 3.0; acl \"SSF\"; "
+                           "allow (write) (userdn = \"ldap:///self\") and (ssf >= \"128\");)");
+        CHECK(r4.bys[0].subject.find(" and ") != std::string::npos);
+    }
+
     if (failures == 0) {
         std::cout << "test_acl: all checks passed" << std::endl;
         return 0;

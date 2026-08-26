@@ -295,25 +295,47 @@ AclRule parseAcl(const std::string &value) {
                 while (!kw.empty() && (kw.back() == ' ' || kw.back() == '!')) kw.pop_back();
                 std::string expr = group.substr(eq + 1);
                 while (!expr.empty() && expr.front() == ' ') expr.erase(0, 1);
-                // strip surrounding quotes
-                if (expr.size() >= 2 && expr.front() == '"' && expr.back() == '"')
+                // strip surrounding quotes for non-targetattr keywords
+                if (kw != "targetattr" && expr.size() >= 2 && expr.front() == '"' && expr.back() == '"')
                     expr = expr.substr(1, expr.size() - 2);
                 if (kw == "targetattr") {
-                    // "a || b" → attrs list
+                    // "a || b" → attrs list. RHDS may repeat the keyword:
+                    // (targetattr="sn" || targetattr="givenName" || targetattr = "tel")
+                    // so collect every quoted value, not just the first. The
+                    // raw expr keeps its quotes ("sn" || targetattr="givenName")
+                    // so each "..." pair yields one attribute.
                     if (negated) r.targetComplex = true;
-                    size_t s = 0;
-                    while (s <= expr.size()) {
-                        size_t sep = expr.find("||", s);
-                        std::string a = expr.substr(s, sep == std::string::npos
-                                                        ? std::string::npos : sep - s);
+                    size_t q = 0;
+                    while ((q = expr.find('"', q)) != std::string::npos) {
+                        size_t qe = expr.find('"', q + 1);
+                        if (qe == std::string::npos) break;
+                        std::string a = expr.substr(q + 1, qe - q - 1);
                         while (!a.empty() && (a.front() == ' ' || a.front() == '\t')) a.erase(0, 1);
                         while (!a.empty() && (a.back() == ' ' || a.back() == '\t')) a.pop_back();
-                        if (!a.empty()) r.targetAttrs.push_back(a);
-                        if (sep == std::string::npos) break;
-                        s = sep + 2;
+                        // "a || b" inside one quoted value → split again
+                        size_t s = 0;
+                        while (s <= a.size()) {
+                            size_t sep = a.find("||", s);
+                            std::string one = a.substr(s, sep == std::string::npos
+                                                            ? std::string::npos : sep - s);
+                            while (!one.empty() && (one.front() == ' ' || one.front() == '\t')) one.erase(0, 1);
+                            while (!one.empty() && (one.back() == ' ' || one.back() == '\t')) one.pop_back();
+                            if (!one.empty()) r.targetAttrs.push_back(one);
+                            if (sep == std::string::npos) break;
+                            s = sep + 2;
+                        }
+                        q = qe + 1;
+                    }
+                    if (r.targetAttrs.empty()) r.targetAttrs.push_back("*");
+                    // Rebuild a clean target from the extracted attrs: the raw
+                    // expr still carries the RHDS quotes ("sn" || targetattr=...).
+                    std::string clean;
+                    for (size_t k = 0; k < r.targetAttrs.size(); ++k) {
+                        if (k) clean += ",";
+                        clean += r.targetAttrs[k];
                     }
                     if (!r.target.empty()) r.target += " ";
-                    r.target += "attrs=" + expr;
+                    r.target += "attrs=" + clean;
                 } else if (kw == "target") {
                     // "ldap:///dn" or "ldap:///..." → DN target
                     std::string dn = expr;
@@ -372,22 +394,56 @@ AclRule parseAcl(const std::string &value) {
             }
             // Normalise the ACI bind rule into a slapd-style subject.
             std::string subj = subject;
+            // RHDS wraps bind rules in parens and spaces the "=":
+            // "(userdn = \"ldap:///self\") and (ssf >= \"128\")".
+            // Strip outer parens, then normalise "kw = \"v\"" → kw="v".
+            // A bind rule combined with and/or/AND/OR is kept as-is (it is a
+            // compound condition, not a single subject).
+            std::string subjLower = subj;
+            for (auto &c : subjLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            bool compound = subjLower.find(" and ") != std::string::npos ||
+                            subjLower.find(" or ") != std::string::npos ||
+                            subjLower.find(" not ") != std::string::npos;
+            if (!compound) {
+                while (!subj.empty() && subj.front() == '(') subj.erase(0, 1);
+                while (!subj.empty() && subj.back() == ')') subj.pop_back();
+                {
+                    std::string norm;
+                    for (size_t k = 0; k < subj.size(); ++k) {
+                        if (subj[k] == ' ' && k + 2 < subj.size() &&
+                            subj[k + 1] == '=' && subj[k + 2] == ' ') {
+                            norm += '=';
+                            k += 2;
+                        } else {
+                            norm += subj[k];
+                        }
+                    }
+                    subj = norm;
+                }
+            }
             const std::string pre = "ldap:///";
-            if (subj.rfind("userdn=", 0) == 0) {
+            if (!compound && subj.rfind("userdn=", 0) == 0) {
                 subj = subj.substr(7);
                 while (!subj.empty() && (subj.front() == '"' || subj.front() == ' '))
                     subj.erase(0, 1);
                 while (!subj.empty() && subj.back() == '"') subj.pop_back();
                 if (subj.rfind(pre, 0) == 0) subj = subj.substr(pre.size());
                 if (subj == "anyone" || subj == "all" || subj == "parent") subj = "*";
-            } else if (subj.rfind("groupdn=", 0) == 0) {
+            } else if (!compound && subj.rfind("groupdn=", 0) == 0) {
                 subj = subj.substr(8);
                 while (!subj.empty() && (subj.front() == '"' || subj.front() == ' '))
                     subj.erase(0, 1);
                 while (!subj.empty() && subj.back() == '"') subj.pop_back();
                 if (subj.rfind(pre, 0) == 0) subj = subj.substr(pre.size());
                 subj = "group/" + subj;
-            } else if (subj.rfind("userattr=", 0) == 0) {
+            } else if (!compound && subj.rfind("roledn=", 0) == 0) {
+                subj = subj.substr(7);
+                while (!subj.empty() && (subj.front() == '"' || subj.front() == ' '))
+                    subj.erase(0, 1);
+                while (!subj.empty() && subj.back() == '"') subj.pop_back();
+                if (subj.rfind(pre, 0) == 0) subj = subj.substr(pre.size());
+                subj = "role/" + subj;
+            } else if (!compound && subj.rfind("userattr=", 0) == 0) {
                 subj = "userattr=" + subj.substr(9);
             }
             AclClause c;
