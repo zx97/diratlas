@@ -589,9 +589,10 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
             int titleW = diratlas::ldapcore::utf8Width(title);
             int boxW = std::max(titleW + 4, tableW + 4);
 
-            // Top border: ┌─ <title> ─...─┐
-            out += "\u250C\u2500 " + title;
-            for (int x = 3 + titleW; x < boxW - 1; x++) out += "\u2500";
+            // Top border: ┌─ <title> ─...─┐ (a space after the title so the
+            // right border does not stick to the text).
+            out += "\u250C\u2500 " + title + " ";
+            for (int x = 4 + titleW; x < boxW - 1; x++) out += "\u2500";
             out += "\u2510\n";
 
             // Header row with the rights column names.
