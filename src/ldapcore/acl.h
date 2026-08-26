@@ -77,4 +77,12 @@ std::string buildAclGraph(const std::vector<AclRule> &rules,
 /// raw value is returned as a single line when there is no "by" clause.
 std::vector<std::string> formatAclValueLines(const std::string &value);
 
+/// Build a readable text report of @p rules and their @p conflicts. Rules are
+/// printed one after another ("[n] to ... by ..."), and each conflict is
+/// listed directly under the rule it concerns (the earlier rule in the pair,
+/// or the single rule for grouped UNCERTAIN entries) instead of a separate
+/// index-referenced list. An empty string is returned for an empty rule set.
+std::string buildAclReport(const std::vector<AclRule> &rules,
+                           const std::vector<AclConflict> &conflicts);
+
 } // namespace diratlas::ldapcore

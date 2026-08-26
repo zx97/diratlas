@@ -1379,30 +1379,11 @@ int main(int argc, char **argv) {
                 return;
             }
             auto rules = diratlas::ldapcore::parseAclValues(vals);
-            std::cout << label << ": " << rules.size() << " olcAccess rules\n";
-            for (size_t i = 0; i < rules.size(); ++i) {
-                std::cout << "  [" << (i + 1) << "] to " << rules[i].target << "\n";
-                for (const auto &cl : rules[i].bys)
-                    std::cout << "          by " << cl.subject << " " << cl.rights << "\n";
-            }
             auto conflicts = diratlas::ldapcore::analyzeAclConflicts(rules);
-            if (conflicts.empty()) {
+            std::cout << label << ": " << rules.size() << " olcAccess rules\n";
+            std::cout << diratlas::ldapcore::buildAclReport(rules, conflicts);
+            if (conflicts.empty())
                 std::cout << "  No conflicts detected.\n";
-            } else {
-                std::cout << "  Conflicts (" << conflicts.size() << "):\n";
-                for (const auto &c : conflicts) {
-                    std::cout << "    ";
-                    switch (c.kind) {
-                        case diratlas::ldapcore::AclConflictKind::Masked:   std::cout << "MASKED"; break;
-                        case diratlas::ldapcore::AclConflictKind::Overlap:  std::cout << "OVERLAP"; break;
-                        case diratlas::ldapcore::AclConflictKind::Order:    std::cout << "ORDER"; break;
-                        case diratlas::ldapcore::AclConflictKind::Uncertain: std::cout << "UNCERTAIN"; break;
-                        default: std::cout << "?"; break;
-                    }
-                    std::cout << " rule[" << (c.first + 1) << "]/[" << (c.second + 1) << "] "
-                              << c.detail << "\n";
-                }
-            }
             if (cfg.aclGraph) {
                 std::cout << "  Rule graph:\n" << diratlas::ldapcore::buildAclGraph(rules, conflicts);
             }

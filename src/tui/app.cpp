@@ -1140,28 +1140,8 @@ void App::handleKey(int ch) {
                     content += fl[k];
                 }
             }
-            std::string report;
-            for (size_t i = 0; i < rules.size(); ++i) {
-                if (i) report += "\n";
-                report += "[" + std::to_string(i + 1) + "] to " + rules[i].target;
-                for (const auto &cl : rules[i].bys)
-                    report += "\n      by " + cl.subject + " " + cl.rights;
-            }
-            if (!conflicts.empty()) {
-                report += "\n\nConflicts:";
-                for (const auto &c : conflicts) {
-                    report += "\n  ";
-                    switch (c.kind) {
-                        case diratlas::ldapcore::AclConflictKind::Masked: report += "MASKED"; break;
-                        case diratlas::ldapcore::AclConflictKind::Overlap: report += "OVERLAP"; break;
-                        case diratlas::ldapcore::AclConflictKind::Order: report += "ORDER"; break;
-                        default: report += "UNCERTAIN"; break;
-                    }
-                    report += " rule[" + std::to_string(c.first + 1) + "]/[" +
-                              std::to_string(c.second + 1) + "] " + c.detail;
-                }
-            }
-            report += "\n\n" + diratlas::ldapcore::buildAclGraph(rules, conflicts);
+            std::string report = diratlas::ldapcore::buildAclReport(rules, conflicts);
+            report += "\n" + diratlas::ldapcore::buildAclGraph(rules, conflicts);
             if (!rules.empty()) {
                 std::vector<std::string> users;
                 if (!bindIdentity_.empty()) users.push_back(bindIdentity_);

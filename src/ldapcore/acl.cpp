@@ -468,4 +468,36 @@ std::vector<std::string> formatAclValueLines(const std::string &value) {
     return out;
 }
 
+std::string buildAclReport(const std::vector<AclRule> &rules,
+                           const std::vector<AclConflict> &conflicts) {
+    if (rules.empty()) return "";
+    std::string out;
+    // Group conflicts by the rule they concern: the earlier rule of the pair
+    // (or the single rule index for grouped UNCERTAIN entries), so each
+    // conflict is printed directly under its rule.
+    std::vector<std::vector<const AclConflict *>> byRule(rules.size());
+    for (const auto &c : conflicts) {
+        int anchor = (c.first >= 0) ? c.first : c.second;
+        if (anchor >= 0 && anchor < static_cast<int>(rules.size()))
+            byRule[static_cast<size_t>(anchor)].push_back(&c);
+    }
+    for (size_t i = 0; i < rules.size(); ++i) {
+        out += "[" + std::to_string(i + 1) + "] to " + rules[i].target + "\n";
+        for (const auto &cl : rules[i].bys)
+            out += "      by " + cl.subject + " " + cl.rights + "\n";
+        for (const auto *c : byRule[i]) {
+            out += "      ! ";
+            switch (c->kind) {
+                case AclConflictKind::Masked:   out += "MASKED"; break;
+                case AclConflictKind::Overlap:  out += "OVERLAP"; break;
+                case AclConflictKind::Order:    out += "ORDER"; break;
+                default:                        out += "UNCERTAIN"; break;
+            }
+            out += " " + c->detail + "\n";
+        }
+        out += "\n";
+    }
+    return out;
+}
+
 } // namespace diratlas::ldapcore

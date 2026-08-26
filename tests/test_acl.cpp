@@ -310,6 +310,22 @@ int main() {
         auto lines = diratlas::ldapcore::formatAclValueLines("{0}to *");
         CHECK(lines.size() == 1 && lines[0] == "{0}to *");
     }
+    // --- buildAclReport: conflict shown under its rule ---
+    {
+        auto rules = parseAclValues({
+            "to * by * read",
+            "to attrs=userPassword by * write",
+        });
+        auto c = analyzeAclConflicts(rules);
+        std::string r = diratlas::ldapcore::buildAclReport(rules, c);
+        CHECK(r.find("[1] to *") != std::string::npos);
+        CHECK(r.find("[2] to attrs=userPassword") != std::string::npos);
+        // the MASKED conflict is anchored under rule 1 (the earlier rule)
+        size_t pos = r.find("MASKED");
+        CHECK(pos != std::string::npos);
+        CHECK(r.rfind("[1] to *", pos) < pos);   // rule 1 line is above the conflict
+        CHECK(r.find("is fully covered") != std::string::npos);
+    }
 
     if (failures == 0) {
         std::cout << "test_acl: all checks passed" << std::endl;
