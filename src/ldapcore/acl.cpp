@@ -541,10 +541,6 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
     };
 
     for (const auto &g : groups) {
-        // No heavy separator between groups: a blank line is enough, and the
-        // rules keep a uniform indentation so the base header (printed by the
-        // caller) is what identifies the branch.
-        if (&g != &groups.front()) out += "\n";
         for (size_t i = g.first; i <= g.last; ++i) {
             out += "  [" + std::to_string(i + 1) + "] to " + rules[i].target + "\n";
             for (const auto &cl : rules[i].bys)
@@ -567,7 +563,6 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
                            std::string(kindName(c->kind)) + " " + c->detail + "\n";
                 }
             }
-            out += "\n";
         }
     }
     return out;

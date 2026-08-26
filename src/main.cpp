@@ -1375,12 +1375,12 @@ int main(int argc, char **argv) {
         auto analyseBase = [&](const std::string &label, const std::vector<std::string> &vals,
                                const std::string &evalDn) {
             if (vals.empty()) {
-                std::cout << "\n  " << label << "  — no olcAccess values\n\n";
+                std::cout << "  " << label << "  — no olcAccess values\n\n";
                 return;
             }
             auto rules = diratlas::ldapcore::parseAclValues(vals);
             auto conflicts = diratlas::ldapcore::analyzeAclConflicts(rules);
-            std::cout << "\n  " << label << "  — " << rules.size() << " olcAccess rules\n\n";
+            std::cout << "  " << label << "  — " << rules.size() << " olcAccess rules\n";
             std::cout << diratlas::ldapcore::buildAclReport(rules, conflicts, cfg.aclGraph);
             if (conflicts.empty())
                 std::cout << "  No conflicts detected.\n";
@@ -1393,6 +1393,7 @@ int main(int argc, char **argv) {
                 std::cout << "    to attrs=*: "
                           << diratlas::ldapcore::evaluateAcl(rules, cfg.aclUser, evalDn, "*") << "\n";
             }
+            std::cout << "\n";  // blank line between the bases
         };
 
         // The -b entry itself carries olcAccess: analyse only that base.
