@@ -4,6 +4,7 @@
 #include "acl.h"
 
 #include <cctype>
+#include <cstring>
 #include <set>
 
 namespace diratlas::ldapcore {
@@ -46,6 +47,82 @@ std::vector<std::string> parseAttrs(const std::string &spec) {
     return out;
 }
 
+// Is @p dn equal to or a descendant of @p ancestor? (suffix RDN match)
+bool dnIsAncestorOrSelf(const std::string &ancestor, const std::string &dn) {
+    if (dn == ancestor) return true;
+    if (dn.size() < ancestor.size() + 2) return false;
+    if (dn.compare(dn.size() - ancestor.size(), ancestor.size(), ancestor) != 0) return false;
+    return dn[dn.size() - ancestor.size() - 1] == ',';
+}
+
+// Split a dn= target ("dn.subtree=ou=x,dc=y", "dn.base=...", ...) into its
+// scope kind and the base DN. Empty kind when the target is not a dn target.
+std::pair<std::string, std::string> parseDnScope(const std::string &target) {
+    static const char *kinds[] = {"dn.subtree", "dn.children", "dn.one",
+                                  "dn.exact", "dn.base", "dn.regex", "dn"};
+    for (const char *k : kinds) {
+        size_t l = std::strlen(k);
+        if (target.rfind(k, 0) == 0 && target.size() > l && target[l] == '=')
+            return {k, target.substr(l + 1)};
+    }
+    return {"", ""};
+}
+
+// Does scope @p a fully contain scope @p b? "*" means "no DN restriction".
+bool scopeCovers(const std::string &aKind, const std::string &aDn,
+                 const std::string &bKind, const std::string &bDn) {
+    if (aKind.empty()) return true;  // a restricts nothing -> covers everything
+    if (bKind.empty()) return false;
+    if (aKind == "dn" || aKind == "dn.base" || aKind == "dn.exact") {
+        if (bKind == "dn" || bKind == "dn.base" || bKind == "dn.exact")
+            return aDn == bDn;
+        return false;  // a single entry does not cover a subtree
+    }
+    if (aKind == "dn.subtree") return dnIsAncestorOrSelf(aDn, bDn);
+    if (aKind == "dn.one") {
+        if (bKind == "dn" || bKind == "dn.base" || bKind == "dn.exact")
+            return dnIsAncestorOrSelf(aDn, bDn) && bDn != aDn &&
+                   bDn.compare(bDn.size() - aDn.size() - 1, 1, ",") == 0 &&
+                   bDn.find(',') == bDn.size() - aDn.size() - 1;
+        return aKind == bKind && aDn == bDn;
+    }
+    if (aKind == "dn.children") {
+        if (bKind == "dn" || bKind == "dn.base" || bKind == "dn.exact")
+            return dnIsAncestorOrSelf(aDn, bDn) && bDn != aDn;
+        if (bKind == "dn.one" || bKind == "dn.children")
+            return dnIsAncestorOrSelf(aDn, bDn);
+        return false;
+    }
+    return false;
+}
+
+// Do two DN scopes have any entry in common?
+bool scopeOverlaps(const std::string &aKind, const std::string &aDn,
+                   const std::string &bKind, const std::string &bDn) {
+    if (aKind.empty() || bKind.empty()) return true;
+    if (scopeCovers(aKind, aDn, bKind, bDn) || scopeCovers(bKind, bDn, aKind, aDn))
+        return true;
+    // one(a) vs one(b) with the same parent: identical child sets.
+    if (aKind == "dn.one" && bKind == "dn.one" && aDn == bDn) return true;
+    // one(a) vs subtree(b) when a's parent is inside b: children of a overlap b.
+    if (aKind == "dn.one" && bKind == "dn.subtree" && dnIsAncestorOrSelf(bDn, aDn))
+        return true;
+    if (bKind == "dn.one" && aKind == "dn.subtree" && dnIsAncestorOrSelf(aDn, bDn))
+        return true;
+    return false;
+}
+
+// Do the attribute lists of two rules share at least one attribute?
+bool attrsOverlap(const AclRule &a, const AclRule &b) {
+    bool aAll = a.targetAttrs.empty() || a.targetAttrs[0] == "*";
+    bool bAll = b.targetAttrs.empty() || b.targetAttrs[0] == "*";
+    if (aAll || bAll) return true;
+    std::set<std::string> aset(a.targetAttrs.begin(), a.targetAttrs.end());
+    for (const auto &x : b.targetAttrs)
+        if (aset.count(x)) return true;
+    return false;
+}
+
 bool subjectOverlaps(const std::string &a, const std::string &b) {
     if (a == "*" || b == "*") return true;
     if (a == b) return true;
@@ -66,41 +143,57 @@ int rightsLevel(const std::string &r) {
     return -1;  // unknown / combined
 }
 
-// Does target A fully cover target B?
+// Does target A fully cover target B? (attrs AND dn scope)
 bool targetCovers(const AclRule &a, const AclRule &b) {
     if (a.targetComplex || b.targetComplex) return false;
     bool aAll = a.targetAttrs.empty() || a.targetAttrs[0] == "*";
     bool bAll = b.targetAttrs.empty() || b.targetAttrs[0] == "*";
     if (!aAll && bAll) return false;
-    if (aAll) return true;
-    // A covers B if every attr of B is in A
-    std::set<std::string> aset(a.targetAttrs.begin(), a.targetAttrs.end());
-    for (const auto &x : b.targetAttrs)
-        if (!aset.count(x)) return false;
-    return true;
+    if (!aAll) {
+        // A covers B if every attr of B is in A
+        std::set<std::string> aset(a.targetAttrs.begin(), a.targetAttrs.end());
+        for (const auto &x : b.targetAttrs)
+            if (!aset.count(x)) return false;
+    }
+    // The DN scope of A must contain the DN scope of B.
+    auto sa = parseDnScope(a.targetDn);
+    auto sb = parseDnScope(b.targetDn);
+    return scopeCovers(sa.first, sa.second, sb.first, sb.second);
 }
 
 bool targetOverlaps(const AclRule &a, const AclRule &b) {
+    if (!attrsOverlap(a, b)) return false;
     if (a.targetComplex || b.targetComplex) return true;  // uncertain -> flag
-    bool aAll = a.targetAttrs.empty() || a.targetAttrs[0] == "*";
-    bool bAll = b.targetAttrs.empty() || b.targetAttrs[0] == "*";
-    if (aAll || bAll) return true;
-    std::set<std::string> aset(a.targetAttrs.begin(), a.targetAttrs.end());
-    for (const auto &x : b.targetAttrs)
-        if (aset.count(x)) return true;
-    return false;
+    auto sa = parseDnScope(a.targetDn);
+    auto sb = parseDnScope(b.targetDn);
+    return scopeOverlaps(sa.first, sa.second, sb.first, sb.second);
 }
 
 // Does a rule target match (targetDN, attr)?
 bool targetMatches(const AclRule &r, const std::string &targetDN, const std::string &attr) {
-    if (r.targetComplex) return true;  // can't model dn.subtree/filter — assume match
+    if (r.targetComplex) return true;  // can't model dn.regex/filter — assume match
     if (!r.targetDn.empty()) {
-        // dn=... : exact entry target; attr applies if attr is covered (all when no attrs=)
+        // dn=... : the target DN must match the entry's scope, and the attr
+        // must be covered (all when no attrs=).
+        auto scope = parseDnScope(r.targetDn);
+        if (!scope.first.empty()) {
+            bool dnOk = false;
+            if (scope.first == "dn" || scope.first == "dn.base" || scope.first == "dn.exact")
+                dnOk = (targetDN == scope.second);
+            else if (scope.first == "dn.subtree")
+                dnOk = dnIsAncestorOrSelf(scope.second, targetDN);
+            else if (scope.first == "dn.one")
+                dnOk = targetDN != scope.second && dnIsAncestorOrSelf(scope.second, targetDN) &&
+                       targetDN.compare(targetDN.size() - scope.second.size() - 1, 1, ",") == 0 &&
+                       targetDN.find(',') == targetDN.size() - scope.second.size() - 1;
+            else if (scope.first == "dn.children")
+                dnOk = targetDN != scope.second && dnIsAncestorOrSelf(scope.second, targetDN);
+            if (!dnOk) return false;
+        }
         bool attrOk = r.targetAttrs.empty() || r.targetAttrs[0] == "*";
         for (const auto &a : r.targetAttrs)
             if (a == attr) attrOk = true;
-        if (r.targetEntry) return attrOk;  // "to entry" + dn handled above
-        return attrOk;  // simplified: dn target matches the given entry
+        return attrOk;
     }
     bool all = r.targetAttrs.empty() || r.targetAttrs[0] == "*";
     if (all) return true;
@@ -163,11 +256,24 @@ AclRule parseAcl(const std::string &value) {
     } else if (r.target.rfind("attrs=", 0) == 0) {
         r.targetAttrs = parseAttrs(r.target.substr(6));
     } else if (r.target.rfind("dn", 0) == 0) {
-        r.targetDn = r.target;
-        r.targetComplex = r.target.rfind("dn.subtree", 0) == 0 ||
-                          r.target.rfind("dn.one", 0) == 0 ||
-                          r.target.rfind("dn.children", 0) == 0 ||
-                          r.target.rfind("filter", 0) == 0;
+        // "dn.subtree=ou=x,dc=y attrs=a,b": the optional attrs= part constrains
+        // which attributes the rule applies to, so split it off the DN.
+        std::string dnPart = r.target;
+        auto attrsPos = dnPart.find(" attrs=");
+        if (attrsPos != std::string::npos) {
+            r.targetAttrs = parseAttrs(dnPart.substr(attrsPos + 7));
+            dnPart = dnPart.substr(0, attrsPos);
+        }
+        // quotes are value delimiters in slapd.access(5), not part of the DN
+        std::string clean;
+        for (char ch : dnPart)
+            if (ch != '"') clean += ch;
+        r.targetDn = clean;
+        auto scope = parseDnScope(dnPart);
+        // dn.regex and filter cannot be modelled statically; the other dn
+        // scopes are compared by hierarchy.
+        r.targetComplex = scope.first == "dn.regex" ||
+                          scope.first.empty();
     } else if (r.target.rfind("filter", 0) == 0) {
         r.targetComplex = true;
     } else {

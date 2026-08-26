@@ -45,11 +45,83 @@ int main() {
         CHECK(r.bys[1].subject == "anonymous" && r.bys[1].rights == "auth");
         CHECK(r.bys[2].subject == "*" && r.bys[2].rights == "none");
     }
-    // --- dn.subtree is marked complex ---
+    // --- dn.subtree is modelled (not complex), dn.regex is complex ---
     {
         auto r = parseAcl("to dn.subtree=\"ou=people,dc=example,dc=com\" by * read");
-        CHECK(r.targetComplex);
+        CHECK(!r.targetComplex);
         CHECK(!r.targetDn.empty());
+        auto r2 = parseAcl("to dn.regex=\"^uid=.*,ou=people,dc=example,dc=com$\" by * read");
+        CHECK(r2.targetComplex);
+    }
+    // --- dn target with attrs= keeps both parts ---
+    {
+        auto r = parseAcl("to dn.regex=ou=People,dc=(.+),dc=europa,dc=eu attrs=cn by * read");
+        CHECK(r.targetComplex);
+        CHECK(r.targetDn.rfind("dn.regex", 0) == 0);
+        CHECK(r.targetAttrs.size() == 1 && r.targetAttrs[0] == "cn");
+    }
+    // --- no overlap: disjoint attrs on dn targets ---
+    {
+        auto rules = parseAclValues({
+            "to attrs=userPassword by * read",
+            "to dn.regex=ou=People,dc=(.+),dc=europa,dc=eu attrs=cn by * write",
+        });
+        auto c = analyzeAclConflicts(rules);
+        CHECK(c.empty());  // userPassword vs cn: nothing shared
+    }
+    // --- no overlap: disjoint dn scopes (same attrs) ---
+    {
+        auto rules = parseAclValues({
+            "to dn.base=\"ou=TrustedApps,dc=europa,dc=eu\" by users read",
+            "to dn.base=\"ou=AuthDomains,dc=europa,dc=eu\" by users write",
+        });
+        auto c = analyzeAclConflicts(rules);
+        bool overlap = false;
+        for (const auto &x : c)
+            if (x.kind == AclConflictKind::Overlap) overlap = true;
+        CHECK(!overlap);  // distinct subtrees: no common entry
+    }
+    // --- overlap: dn.subtree covers dn.base below it ---
+    {
+        auto rules = parseAclValues({
+            "to dn.subtree=\"dc=europa,dc=eu\" by users read",
+            "to dn.base=\"ou=People,dc=europa,dc=eu\" by users write",
+        });
+        auto c = analyzeAclConflicts(rules);
+        bool overlap = false;
+        for (const auto &x : c)
+            if (x.kind == AclConflictKind::Overlap) overlap = true;
+        // the broader subtree rule fully covers the base rule → the conflict
+        // is reported as MASKED (rule 1 wins for the whole subtree)
+        bool masked = false;
+        for (const auto &x : c)
+            if (x.kind == AclConflictKind::Masked && x.first == 0 && x.second == 1) masked = true;
+        CHECK(overlap || masked);
+        CHECK(masked);
+    }
+    // --- masked: broader dn.subtree + attrs=* covers narrower ---
+    {
+        auto rules = parseAclValues({
+            "to dn.subtree=\"dc=europa,dc=eu\" attrs=* by users read",
+            "to dn.base=\"ou=People,dc=europa,dc=eu\" attrs=cn by users read",
+        });
+        auto c = analyzeAclConflicts(rules);
+        bool masked = false;
+        for (const auto &x : c)
+            if (x.kind == AclConflictKind::Masked && x.first == 0 && x.second == 1) masked = true;
+        CHECK(masked);
+    }
+    // --- evaluateAcl: dn.subtree target matches entries below it ---
+    {
+        auto rules = parseAclValues({
+            "to dn.subtree=\"ou=People,dc=europa,dc=eu\" attrs=cn by users read by * none",
+        });
+        CHECK(evaluateAcl(rules, "uid=bob,ou=People,dc=europa,dc=eu",
+                          "uid=bob,ou=People,dc=europa,dc=eu", "cn") == "read");
+        CHECK(evaluateAcl(rules, "uid=bob,ou=People,dc=europa,dc=eu",
+                          "uid=bob,ou=People,dc=europa,dc=eu", "mail") == "none");
+        CHECK(evaluateAcl(rules, "uid=bob,ou=People,dc=europa,dc=eu",
+                          "uid=bob,ou=Other,dc=europa,dc=eu", "cn") == "none");
     }
     // --- to entry ---
     {
@@ -103,10 +175,10 @@ int main() {
             if (x.kind == AclConflictKind::Overlap || x.kind == AclConflictKind::Masked) found = true;
         CHECK(!found);
     }
-    // --- uncertain: complex target ---
+    // --- uncertain: complex target (dn.regex) ---
     {
         auto rules = parseAclValues({
-            "to dn.subtree=\"ou=people,dc=example,dc=com\" by * read",
+            "to dn.regex=\"^ou=.*,dc=example,dc=com$\" by * read",
             "to attrs=uid by * write",
         });
         auto c = analyzeAclConflicts(rules);
