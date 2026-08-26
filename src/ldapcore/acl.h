@@ -71,4 +71,10 @@ std::string evaluateAcl(const std::vector<AclRule> &rules,
 std::string buildAclGraph(const std::vector<AclRule> &rules,
                           const std::vector<AclConflict> &conflicts);
 
+/// Split a raw olcAccess/aci value into display lines: the "to <target>"
+/// clause on the first line, then one indented "by <subject> <rights>" line
+/// per clause. Quotes are preserved (syntax highlighting colours them). The
+/// raw value is returned as a single line when there is no "by" clause.
+std::vector<std::string> formatAclValueLines(const std::string &value);
+
 } // namespace diratlas::ldapcore

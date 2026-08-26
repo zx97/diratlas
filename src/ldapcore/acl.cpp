@@ -435,4 +435,32 @@ std::string buildAclGraph(const std::vector<AclRule> &rules,
     return out;
 }
 
+std::vector<std::string> formatAclValueLines(const std::string &value) {
+    std::vector<std::string> out;
+    // Split on " by " outside double quotes: the first part is the "to"
+    // clause, each following part is one "by <subject> <rights>" clause.
+    std::vector<std::string> parts;
+    std::string cur;
+    bool inQuote = false;
+    size_t i = 0;
+    while (i < value.size()) {
+        char c = value[i];
+        if (c == '"') inQuote = !inQuote;
+        if (!inQuote && c == ' ' && value.compare(i, 4, " by ") == 0) {
+            parts.push_back(cur);
+            cur.clear();
+            i += 4;
+            continue;
+        }
+        cur += c;
+        ++i;
+    }
+    parts.push_back(cur);
+    if (parts.empty()) return {value};
+    out.push_back(parts[0]);
+    for (size_t k = 1; k < parts.size(); ++k)
+        out.push_back("      by " + parts[k]);
+    return out;
+}
+
 } // namespace diratlas::ldapcore

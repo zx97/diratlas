@@ -260,6 +260,22 @@ int main() {
         CHECK(g.find("(no rules)") != std::string::npos);
     }
 
+    // --- formatAclValueLines: one line per clause, quotes preserved ---
+    {
+        auto lines = diratlas::ldapcore::formatAclValueLines(
+            "{0}to attrs=userPassword by self read by dn.base=\"cn=Admin,dc=eu\" manage by * none");
+        CHECK(lines.size() == 4);
+        CHECK(lines[0] == "{0}to attrs=userPassword");
+        CHECK(lines[1] == "      by self read");
+        CHECK(lines[2] == "      by dn.base=\"cn=Admin,dc=eu\" manage");
+        CHECK(lines[3] == "      by * none");
+    }
+    // --- formatAclValueLines: no "by" → single line ---
+    {
+        auto lines = diratlas::ldapcore::formatAclValueLines("{0}to *");
+        CHECK(lines.size() == 1 && lines[0] == "{0}to *");
+    }
+
     if (failures == 0) {
         std::cout << "test_acl: all checks passed" << std::endl;
         return 0;

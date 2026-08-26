@@ -1127,13 +1127,18 @@ void App::handleKey(int ch) {
             auto vals = attrs_->getAttrValues(attr);
             auto rules = diratlas::ldapcore::parseAclValues(vals);
             auto conflicts = diratlas::ldapcore::analyzeAclConflicts(rules);
-            // The popup shows the raw ACL values with syntax colours; the full
-            // interpreted report (parsed rules, conflicts, graph, evaluations)
-            // is saved to a file with 's'.
+            // The popup shows the raw ACL values with syntax colours, one
+            // "by" clause per indented line (never wrapped mid-rule); the
+            // full interpreted report is saved to a file with 's'.
             std::string content;
             for (size_t v = 0; v < vals.size(); ++v) {
                 if (v) content += "\n";
-                content += vals[v];
+                auto fl = diratlas::ldapcore::formatAclValueLines(vals[v]);
+                if (fl.empty()) { content += vals[v]; continue; }
+                for (size_t k = 0; k < fl.size(); ++k) {
+                    if (k) content += "\n";
+                    content += fl[k];
+                }
             }
             std::string report;
             for (size_t i = 0; i < rules.size(); ++i) {
@@ -1448,22 +1453,29 @@ void App::showValuePopup(const std::string &title, const std::string &content,
     bool edited = false;
 
     for (;;) {
-        // Popup width (used both for sizing and for wrapping long lines).
-        const int cols = 72;
+        // Popup width: use most of the terminal for long ACL values instead of
+        // a fixed 72 columns (which wrapped rules mid-clause).
+        int cols = std::min(COLS - 4, 130);
+        if (cols < 60) cols = 60;
 
-        // Split content into lines (preserving embedded newlines), wrapping
-        // long physical lines to the popup width so no content is hidden
-        // off-screen.
+        // Split content into lines (preserving embedded newlines). Long
+        // physical lines are wrapped to the popup width so nothing is hidden
+        // off-screen; ACL values are pre-formatted per clause and are never
+        // re-wrapped (a rule must stay on its own lines).
         const int wrapWidth = cols - 2;
         std::vector<std::string> lines;
         {
             std::string cur;
             auto flush = [&]() {
-                while (static_cast<int>(cur.size()) > wrapWidth) {
-                    lines.push_back(cur.substr(0, wrapWidth));
-                    cur.erase(0, wrapWidth);
+                if (aclHighlight) {
+                    lines.push_back(cur);
+                } else {
+                    while (static_cast<int>(cur.size()) > wrapWidth) {
+                        lines.push_back(cur.substr(0, wrapWidth));
+                        cur.erase(0, wrapWidth);
+                    }
+                    lines.push_back(cur);
                 }
-                lines.push_back(cur);
                 cur.clear();
             };
             for (char c : current) {
@@ -1483,13 +1495,27 @@ void App::showValuePopup(const std::string &title, const std::string &content,
         if (sx < 0) sx = 0;
 
         int scroll = 0;
+        int hscroll = 0;
         int contentH = rows - 3;
         for (;;) {
-            wattron(stdscr, COLOR_PAIR(CP_BORDER) | A_BOLD);
+            // Drop shadow behind the popup so it stands out from the
+            // attribute panel underneath (whose ACL values are also coloured).
+            wattron(stdscr, COLOR_PAIR(CP_BORDER) | A_DIM);
+            for (int r = 1; r <= rows; r++)
+                for (int c = 1; c <= cols; c++)
+                    mvwaddch(stdscr, sy + r, sx + c, ' ');
+            wattroff(stdscr, COLOR_PAIR(CP_BORDER) | A_DIM);
+
+            // Opaque popup background (dark) — the panel behind must not bleed
+            // through between the coloured ACL tokens.
+            wattron(stdscr, COLOR_PAIR(CP_HEADER_BG));
             for (int r = 0; r < rows; r++)
                 for (int c = 0; c < cols; c++)
                     mvwaddch(stdscr, sy + r, sx + c, ' ');
-            wattroff(stdscr, COLOR_PAIR(CP_BORDER) | A_BOLD);
+            wattroff(stdscr, COLOR_PAIR(CP_HEADER_BG));
+
+            // Popup frame in blue, distinct from the content colours.
+            wattron(stdscr, COLOR_PAIR(CP_BORDER));
             for (int c = 1; c < cols - 1; c++) {
                 mvwaddch(stdscr, sy, sx + c, '-');
                 mvwaddch(stdscr, sy + rows - 1, sx + c, '-');
@@ -1502,13 +1528,19 @@ void App::showValuePopup(const std::string &title, const std::string &content,
             mvwaddch(stdscr, sy + rows - 1, sx, '+'); mvwaddch(stdscr, sy + rows - 1, sx + cols - 1, '+');
             wattron(stdscr, COLOR_PAIR(CP_HEADER) | A_BOLD);
             mvwaddstr(stdscr, sy, sx + 2, (" " + title + " ").c_str());
+            wattroff(stdscr, COLOR_PAIR(CP_BORDER));
             wattroff(stdscr, COLOR_PAIR(CP_HEADER) | A_BOLD);
 
             int fy = sy + 1;
             int lineEnd = std::min<int>(static_cast<int>(lines.size()), scroll + contentH);
             for (int i = scroll; i < lineEnd && fy < sy + rows - 1; i++, fy++) {
                 if (aclHighlight) {
-                    drawAclValue(stdscr, fy, sx + 1, cols - 2, lines[i], CP_ATTR_VALUE, A_NORMAL);
+                    // One rule per set of lines, never wrapped: horizontal
+                    // scroll reveals what does not fit.
+                    std::string seg = lines[i];
+                    if (hscroll < static_cast<int>(seg.size()))
+                        seg = seg.substr(hscroll);
+                    drawAclValue(stdscr, fy, sx + 1, cols - 2, seg, CP_ATTR_VALUE, A_NORMAL);
                 } else {
                     mvwaddstr(stdscr, fy, sx + 1, lines[i].c_str());
                 }
@@ -1520,6 +1552,12 @@ void App::showValuePopup(const std::string &title, const std::string &content,
             if (!saveContent.empty()) hints += "   s=save";
             if (!attrName.empty() && !dn.empty()) {
                 hints += "   [Enter Edit]  F2=edit";
+            }
+            if (aclHighlight) {
+                bool wide = false;
+                for (const auto &l : lines)
+                    if (static_cast<int>(l.size()) > cols - 2) { wide = true; break; }
+                if (wide) hints += "   \u2190/\u2192=hscroll";
             }
             if (static_cast<int>(lines.size()) > contentH)
                 hints += "   Up/Dn=scroll  (" + std::to_string(scroll + 1) + "-" +
@@ -1542,6 +1580,16 @@ void App::showValuePopup(const std::string &title, const std::string &content,
             if (ch == KEY_HOME) scroll = 0;
             if (ch == KEY_END)
                 scroll = std::max(0, static_cast<int>(lines.size()) - contentH);
+            if (aclHighlight) {
+                int maxH = 0;
+                for (const auto &l : lines)
+                    if (static_cast<int>(l.size()) > maxH) maxH = static_cast<int>(l.size());
+                maxH = std::max(0, maxH - (cols - 2));
+                if (ch == KEY_LEFT && hscroll > 0) hscroll -= 8;
+                if (ch == KEY_RIGHT && hscroll < maxH) hscroll += 8;
+                if (ch == KEY_HOME) hscroll = 0;
+                if (ch == KEY_END) hscroll = maxH;
+            }
             // Save the report to a file (ACL popups offer a full report).
             if (!saveContent.empty() && (ch == 's' || ch == 'S')) {
                 for (int n = 1;; ++n) {
