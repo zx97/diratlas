@@ -1140,8 +1140,7 @@ void App::handleKey(int ch) {
                     content += fl[k];
                 }
             }
-            std::string report = diratlas::ldapcore::buildAclReport(rules, conflicts);
-            report += "\n" + diratlas::ldapcore::buildAclGraph(rules, conflicts);
+            std::string report = diratlas::ldapcore::buildAclReport(rules, conflicts, true);
             if (!rules.empty()) {
                 std::vector<std::string> users;
                 if (!bindIdentity_.empty()) users.push_back(bindIdentity_);

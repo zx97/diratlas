@@ -482,7 +482,8 @@ std::vector<std::string> formatAclValueLines(const std::string &value) {
 }
 
 std::string buildAclReport(const std::vector<AclRule> &rules,
-                           const std::vector<AclConflict> &conflicts) {
+                           const std::vector<AclConflict> &conflicts,
+                           bool withGraph) {
     if (rules.empty()) return "";
     std::string out;
     // Group conflicts by the rule they concern: the earlier rule of the pair
@@ -530,30 +531,52 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
             groups.back().last = i;
     }
 
+    auto kindName = [](AclConflictKind k) -> const char * {
+        switch (k) {
+            case AclConflictKind::Masked:  return "MASKED";
+            case AclConflictKind::Overlap: return "OVERLAP";
+            case AclConflictKind::Order:   return "ORDER";
+            default:                       return "UNCERTAIN";
+        }
+    };
+
     for (const auto &g : groups) {
         bool multi = (g.last > g.first);
         if (multi) {
-            out += "──────────── " + g.branch + " (règles " +
-                   std::to_string(g.first + 1) + "-" + std::to_string(g.last + 1) +
-                   ") ────────────\n\n";
+            // Framed branch header with breathing room so the branch name
+            // stands out; rules below are indented deeper.
+            out += "\n";
+            std::string hdr = "  ══ " + g.branch + "  (règles " +
+                              std::to_string(g.first + 1) + "-" +
+                              std::to_string(g.last + 1) + ")";
+            out += hdr;
+            for (int fill = 60 - static_cast<int>(hdr.size()); fill > 0; --fill)
+                out += "\u2550";
+            out += "\n\n";
         }
+        const std::string pad = multi ? "      " : "  ";
+        const std::string byPad = multi ? "          " : "      ";
         for (size_t i = g.first; i <= g.last; ++i) {
-            out += "[" + std::to_string(i + 1) + "] to " + rules[i].target + "\n";
+            out += pad + "[" + std::to_string(i + 1) + "] to " + rules[i].target + "\n";
             for (const auto &cl : rules[i].bys)
-                out += "      by " + cl.subject + " " + cl.rights + "\n";
-            // Tree branch from the rule down to its conflicts (one per line),
-            // so the reader sees at a glance which rule each finding belongs to.
+                out += byPad + "by " + cl.subject + " " + cl.rights + "\n";
+            // Graph edges (withGraph) or conflict summary: drawn under the
+            // rule as a tree so the reader sees at a glance which rule each
+            // finding belongs to, without repeating the rules themselves.
             for (size_t k = 0; k < byRule[i].size(); ++k) {
                 const auto *c = byRule[i][k];
                 bool last = (k + 1 == byRule[i].size());
-                out += std::string("      ") + (last ? "└─ " : "├─ ") + "! ";
-                switch (c->kind) {
-                    case AclConflictKind::Masked:   out += "MASKED"; break;
-                    case AclConflictKind::Overlap:  out += "OVERLAP"; break;
-                    case AclConflictKind::Order:    out += "ORDER"; break;
-                    default:                        out += "UNCERTAIN"; break;
+                if (withGraph) {
+                    out += byPad + (last ? "└─ " : "├─ ");
+                    out += std::string(kindName(c->kind)) + " ──► [" +
+                           std::to_string(c->second + 1) + "] to " +
+                           rules[static_cast<size_t>(c->second)].target;
+                    if (!c->detail.empty()) out += "  (" + c->detail + ")";
+                    out += "\n";
+                } else {
+                    out += byPad + (last ? "└─ " : "├─ ") + "! " +
+                           std::string(kindName(c->kind)) + " " + c->detail + "\n";
                 }
-                out += " " + c->detail + "\n";
             }
             out += "\n";
         }

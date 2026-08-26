@@ -400,13 +400,27 @@ int main() {
             "to dn.base=\"ou=Groups,dc=europa,dc=eu\" by users read",
         });
         std::string r = diratlas::ldapcore::buildAclReport(rules, {});
-        // rules 1-2 share the ou=People branch → one separator with the range
-        CHECK(r.find("──────────── ou=People (règles 1-2) ────────────") != std::string::npos);
-        // single-rule group (ou=Groups) gets no separator
-        CHECK(r.find("──────────── ou=Groups") == std::string::npos);
+        // rules 1-2 share the ou=People branch → one framed header with range
+        CHECK(r.find("══ ou=People  (règles 1-2)") != std::string::npos);
+        // single-rule group (ou=Groups) gets no header
+        CHECK(r.find("══ ou=Groups") == std::string::npos);
         CHECK(r.find("[3] to dn.base=\"ou=Groups,dc=europa,dc=eu\"") != std::string::npos);
         // tree arrow used for conflicts
         CHECK(r.find("└─ ! ") == std::string::npos);  // no conflicts here
+    }
+    // --- buildAclReport: withGraph shows edges under the rule ---
+    {
+        auto rules = parseAclValues({
+            "to * by * read",
+            "to attrs=userPassword by * write",
+        });
+        auto c = analyzeAclConflicts(rules);
+        std::string r = diratlas::ldapcore::buildAclReport(rules, c, true);
+        CHECK(r.find("MASKED ──► [2] to attrs=userPassword") != std::string::npos);
+        CHECK(r.find("(rule 2 is fully covered by rule 1)") != std::string::npos);
+        // without withGraph: plain conflict text
+        std::string r2 = diratlas::ldapcore::buildAclReport(rules, c);
+        CHECK(r2.find("! MASKED rule 2 is fully covered by rule 1") != std::string::npos);
     }
 
     if (failures == 0) {

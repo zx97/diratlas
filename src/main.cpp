@@ -1381,12 +1381,9 @@ int main(int argc, char **argv) {
             auto rules = diratlas::ldapcore::parseAclValues(vals);
             auto conflicts = diratlas::ldapcore::analyzeAclConflicts(rules);
             std::cout << label << ": " << rules.size() << " olcAccess rules\n";
-            std::cout << diratlas::ldapcore::buildAclReport(rules, conflicts);
+            std::cout << diratlas::ldapcore::buildAclReport(rules, conflicts, cfg.aclGraph);
             if (conflicts.empty())
                 std::cout << "  No conflicts detected.\n";
-            if (cfg.aclGraph) {
-                std::cout << "  Rule graph:\n" << diratlas::ldapcore::buildAclGraph(rules, conflicts);
-            }
             if (!cfg.aclUser.empty()) {
                 std::cout << "  Evaluation (slapacl-style) for " << cfg.aclUser << ":\n";
                 std::cout << "    to " << evalDn << " (entry): "
