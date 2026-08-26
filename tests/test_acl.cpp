@@ -326,6 +326,20 @@ int main() {
         CHECK(r.rfind("[1] to *", pos) < pos);   // rule 1 line is above the conflict
         CHECK(r.find("is fully covered") != std::string::npos);
     }
+    // --- buildAclReport: branch separators ---
+    {
+        auto rules = parseAclValues({
+            "to attrs=userPassword by * read",
+            "to dn.subtree=\"ou=People,dc=europa,dc=eu\" by users read",
+            "to dn.base=\"ou=Groups,dc=europa,dc=eu\" by users read",
+        });
+        std::string r = diratlas::ldapcore::buildAclReport(rules, {});
+        CHECK(r.find("──────────── attrs=* ────────────") != std::string::npos);
+        CHECK(r.find("──────────── ou=People ────────────") != std::string::npos);
+        CHECK(r.find("──────────── ou=Groups ────────────") != std::string::npos);
+        // tree arrow used for conflicts
+        CHECK(r.find("└─ ! ") == std::string::npos);  // no conflicts here
+    }
 
     if (failures == 0) {
         std::cout << "test_acl: all checks passed" << std::endl;

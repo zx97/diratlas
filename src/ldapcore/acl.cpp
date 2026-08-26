@@ -481,12 +481,45 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
         if (anchor >= 0 && anchor < static_cast<int>(rules.size()))
             byRule[static_cast<size_t>(anchor)].push_back(&c);
     }
+
+    // Group consecutive rules by their directory branch (ou=... container,
+    // the tree root, or the catch-all) so the listing reads per ACL section.
+    auto branchKey = [](const AclRule &r) -> std::string {
+        if (!r.targetDn.empty()) {
+            auto sc = parseDnScope(r.targetDn);
+            std::string dn = sc.second;
+            auto f = dn.find(" filter=");
+            if (f != std::string::npos) dn = dn.substr(0, f);
+            auto ou = dn.find("ou=");
+            if (ou != std::string::npos) {
+                dn = dn.substr(ou);
+                auto comma = dn.find(',');
+                if (comma != std::string::npos) dn = dn.substr(0, comma);
+                return dn;
+            }
+            return dn.empty() ? r.target : dn;
+        }
+        if (!r.targetAttrs.empty()) return "attrs=*";
+        return r.target.empty() ? "(other)" : r.target;
+    };
+
+    std::string prevBranch;
     for (size_t i = 0; i < rules.size(); ++i) {
+        std::string branch = branchKey(rules[i]);
+        if (i == 0 || branch != prevBranch) {
+            out += "──────────── " + branch + " ────────────\n\n";
+        }
+        prevBranch = branch;
+
         out += "[" + std::to_string(i + 1) + "] to " + rules[i].target + "\n";
         for (const auto &cl : rules[i].bys)
             out += "      by " + cl.subject + " " + cl.rights + "\n";
-        for (const auto *c : byRule[i]) {
-            out += "      ! ";
+        // Tree branch from the rule down to its conflicts (one per line),
+        // so the reader sees at a glance which rule each finding belongs to.
+        for (size_t k = 0; k < byRule[i].size(); ++k) {
+            const auto *c = byRule[i][k];
+            bool last = (k + 1 == byRule[i].size());
+            out += std::string("      ") + (last ? "└─ " : "├─ ") + "! ";
             switch (c->kind) {
                 case AclConflictKind::Masked:   out += "MASKED"; break;
                 case AclConflictKind::Overlap:  out += "OVERLAP"; break;
@@ -497,6 +530,8 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
         }
         out += "\n";
     }
+    if (!rules.empty())
+        out += "──────────── " + prevBranch + " ────────────\n";
     return out;
 }
 
