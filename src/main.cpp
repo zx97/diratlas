@@ -30,6 +30,7 @@
 #include "banner.hpp"
 #include "ldaprc.h"
 #include "ldapcore/bytes.h"
+#include "ldapcore/utf8.h"
 #include "log.h"
 
 #ifndef BUILD_NUMBER
@@ -1373,7 +1374,10 @@ int main(int argc, char **argv) {
         // Print a section title framed at column 0 so each analysed base is
         // clearly visible as the root of the rules that follow it.
         auto printSection = [](const std::string &title) {
-            int w = static_cast<int>(title.size()) + 4;
+            // Width in display columns, not bytes: the em dash and any
+            // non-ASCII char occupy 1 column but several bytes, so using
+            // title.size() would make the top border wider than the line.
+            int w = diratlas::ldapcore::utf8Width(title) + 4;
             std::cout << "\u250C";
             for (int i = 0; i < w; ++i) std::cout << "\u2500";
             std::cout << "\u2510\n";
