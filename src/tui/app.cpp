@@ -1147,7 +1147,24 @@ void App::handleKey(int ch) {
                                std::to_string(c.second + 1) + "] " + c.detail;
                 }
             }
-            showValuePopup("ACL " + attr, content, "", currentDN_);
+            std::string report = content;
+            report += "\n\n" + diratlas::ldapcore::buildAclGraph(rules, conflicts);
+            if (!rules.empty()) {
+                std::vector<std::string> users;
+                if (!bindIdentity_.empty()) users.push_back(bindIdentity_);
+                users.push_back("");  // anonymous
+                for (const auto &u : users) {
+                    std::string label = u.empty() ? "anonymous" : u;
+                    report += "\nEvaluation (slapacl-style) for " + label + ":\n";
+                    report += "  to " + currentDN_ + " (entry): " +
+                              diratlas::ldapcore::evaluateAcl(rules, u, currentDN_, "entry") + "\n";
+                    report += "  to attrs=userPassword: " +
+                              diratlas::ldapcore::evaluateAcl(rules, u, currentDN_, "userPassword") + "\n";
+                    report += "  to attrs=*: " +
+                              diratlas::ldapcore::evaluateAcl(rules, u, currentDN_, "*") + "\n";
+                }
+            }
+            showValuePopup("ACL " + attr, content, "", currentDN_, report);
         } else if (attrs_->goToDN_.find("VIEWFULL:") == 0) {
             std::string rest = attrs_->goToDN_.substr(9);
             attrs_->goToDN_.clear();
@@ -1415,7 +1432,8 @@ void App::showHelp() {
 }
 
 void App::showValuePopup(const std::string &title, const std::string &content,
-                         const std::string &attrName, const std::string &dn) {
+                         const std::string &attrName, const std::string &dn,
+                         const std::string &saveContent) {
     timeout(-1);  // blocking input for the popup
 
     std::string current = content;
@@ -1487,6 +1505,7 @@ void App::showValuePopup(const std::string &title, const std::string &content,
             // Bottom bar: [Edit] button (only when writable) + hints
             int hintY = sy + rows - 2;
             std::string hints = "Esc=close";
+            if (!saveContent.empty()) hints += "   s=save";
             if (!attrName.empty() && !dn.empty()) {
                 hints += "   [Enter Edit]  F2=edit";
             }
@@ -1511,6 +1530,26 @@ void App::showValuePopup(const std::string &title, const std::string &content,
             if (ch == KEY_HOME) scroll = 0;
             if (ch == KEY_END)
                 scroll = std::max(0, static_cast<int>(lines.size()) - contentH);
+            // Save the report to a file (ACL popups offer a full report).
+            if (!saveContent.empty() && (ch == 's' || ch == 'S')) {
+                for (int n = 1;; ++n) {
+                    char buf[64];
+                    std::snprintf(buf, sizeof(buf), "diratlas_acl_%04d.txt", n);
+                    std::string path = buf;
+                    std::ifstream probe(path);
+                    if (!probe.good()) {
+                        std::ofstream out(path);
+                        if (out.is_open()) {
+                            out << saveContent;
+                            setLog("Saved ACL report to " + path);
+                        } else {
+                            setLog("Cannot write " + path);
+                        }
+                        break;
+                    }
+                }
+                goto done;
+            }
             // Edit button / F2: open the multi-line editor on the decoded text.
             if (!attrName.empty() && !dn.empty() &&
                 (ch == '\n' || ch == '\r' || ch == KEY_ENTER || ch == KEY_F(2))) {

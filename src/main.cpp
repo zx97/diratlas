@@ -238,6 +238,8 @@ struct Config {
     bool aclCheck = false;
     /// --acl-user <dn>: simulate access for this user (slapacl-style evaluation)
     std::string aclUser;
+    /// --acl-graph: with --acl-check, print the rule-relation graph
+    bool aclGraph = false;
     /// --extended-op <oid>[:hex]: generic extended operation request
     std::string extOpSpec;
     // ---- TLS options filled from -o / ldaprc ----
@@ -532,6 +534,8 @@ FLAGS (ldapsearch-compatible)
     --acl-user <dn>    with --acl-check: simulate access for this user
                        (slapacl-style evaluation; first matching rule
                        and clause wins)
+    --acl-graph        with --acl-check: print the rule-relation graph
+                       (which rule affects which later rule)
 
 ───────────────────────────────────────────────────────────────
 KEYBOARD
@@ -543,7 +547,8 @@ KEYBOARD
   Enter            Select node (load attrs); moves focus to the
                    attributes panel so F2 edit works immediately
                    On an olcAccess/aci value: open a structured ACL
-                   popup (parsed rules + conflict summary)
+                   popup (parsed rules + conflict summary; s=save the
+                   full report — rules, graph and evaluations — to a file)
   g                Jump the tree back to the RootDSE
   /                Tree: focus filter bar with search base
                    Attrs: enter search-in-value mode
@@ -810,6 +815,7 @@ int main(int argc, char **argv) {
         {"sync-refresh-only", no_argument, nullptr, 0},
         {"acl-check",  no_argument, nullptr, 0},
         {"acl-user",   required_argument, nullptr, 0},
+        {"acl-graph",  no_argument, nullptr, 0},
         {"extended-op", required_argument, nullptr, 0},
         {"cli",        no_argument,       nullptr, 0},
         {"doc",        no_argument,       nullptr, 0},
@@ -857,6 +863,7 @@ int main(int argc, char **argv) {
                 else if (name == "sync-refresh-only") cfg.syncRefreshOnly = true;
                 else if (name == "acl-check") cfg.aclCheck = true;
                 else if (name == "acl-user") cfg.aclUser = optarg;
+                else if (name == "acl-graph") cfg.aclGraph = true;
                 else if (name == "extended-op") cfg.extOpSpec = optarg;
                 else if (name == "doc") { printDocumentation(); return 0; }
                 else if (name == "filter") { cfg.searchFilter = optarg; cfg.filterSet = true; }
@@ -1395,6 +1402,10 @@ int main(int argc, char **argv) {
                 std::cout << " rule[" << (c.first + 1) << "]/[" << (c.second + 1) << "] "
                           << c.detail << "\n";
             }
+        }
+        if (cfg.aclGraph) {
+            std::cout << "\nRule graph:\n"
+                      << diratlas::ldapcore::buildAclGraph(rules, conflicts);
         }
         if (!cfg.aclUser.empty()) {
             std::cout << "Evaluation (slapacl-style) for " << cfg.aclUser << ":\n";

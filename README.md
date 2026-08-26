@@ -53,6 +53,9 @@ OpenLDAP tools; GNU long options are also accepted):
     -b 'olcDatabase={1}mdb,cn=config' --acl-check \
     --acl-user 'gidNumber=1000+uidNumber=1000,cn=peercred,cn=external,cn=auth'
     # slapacl-style evaluation: which rule/clause actually grants this user
+./build/diratlas -Y EXTERNAL -H ldapi://%2fvar%2frun%2fslapd.sock \
+    -b 'olcDatabase={1}mdb,cn=config' --acl-check --acl-graph
+    # also print the rule-relation graph (which rule affects which later rule)
 ```
 
 See `diratlas --help` or `diratlas doc` for the full option reference.
@@ -371,5 +374,8 @@ ctest --test-dir build --output-on-failure
   readable with the current bind stay visible (marked with ⚠️).
 - **ACL values** (`olcAccess`, `aci`, `orclentrylevelaci`): Enter opens a
   structured popup with each rule's `to`/`by` clauses and the conflict
-  summary (masked rules, overlaps). `--acl-check` on the CLI does the same
-  analysis on the `-b` entry and prints an evaluation per `--acl-user`.
+  summary (masked rules, overlaps). `s` in the popup saves a full report
+  (rules, rule-relation graph, slapacl-style evaluations for the bind
+  identity and anonymous) to `diratlas_acl_0001.txt`. `--acl-check` on the
+  CLI does the same analysis on the `-b` entry and prints an evaluation per
+  `--acl-user`; `--acl-graph` adds the rule-relation graph.

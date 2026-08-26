@@ -288,4 +288,45 @@ std::string evaluateAcl(const std::vector<AclRule> &rules,
     return "none";
 }
 
+std::string buildAclGraph(const std::vector<AclRule> &rules,
+                          const std::vector<AclConflict> &conflicts) {
+    if (rules.empty()) return "  (no rules)\n";
+    std::string out = "  Rule graph (first-match order; each rule shows the later\n";
+    out += "  rules it affects):\n";
+    std::vector<std::vector<const AclConflict *>> outgoing(rules.size());
+    for (const auto &c : conflicts) {
+        if (c.first >= 0 && c.first < static_cast<int>(rules.size()))
+            outgoing[static_cast<size_t>(c.first)].push_back(&c);
+    }
+    for (size_t i = 0; i < rules.size(); ++i) {
+        std::string label = "[" + std::to_string(i + 1) + "] to " + rules[i].target;
+        if (!rules[i].bys.empty()) {
+            label += "  by ";
+            for (size_t k = 0; k < rules[i].bys.size(); ++k) {
+                if (k) label += ", ";
+                label += rules[i].bys[k].subject + " " + rules[i].bys[k].rights;
+            }
+        }
+        if (outgoing[i].empty()) {
+            out += "  " + label + "  (no outgoing relations)\n";
+            continue;
+        }
+        out += "  " + label + "\n";
+        for (size_t k = 0; k < outgoing[i].size(); ++k) {
+            const auto *c = outgoing[i][k];
+            bool last = (k + 1 == outgoing[i].size());
+            out += last ? "   └─ " : "   ├─ ";
+            switch (c->kind) {
+                case AclConflictKind::Masked:   out += "MASKED"; break;
+                case AclConflictKind::Overlap:  out += "OVERLAP"; break;
+                case AclConflictKind::Order:    out += "ORDER"; break;
+                default:                        out += "UNCERTAIN"; break;
+            }
+            out += " ──► [" + std::to_string(c->second + 1) + "] to " +
+                   rules[static_cast<size_t>(c->second)].target + "\n";
+        }
+    }
+    return out;
+}
+
 } // namespace diratlas::ldapcore

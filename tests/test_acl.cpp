@@ -9,6 +9,7 @@
 
 using diratlas::ldapcore::AclConflictKind;
 using diratlas::ldapcore::analyzeAclConflicts;
+using diratlas::ldapcore::buildAclGraph;
 using diratlas::ldapcore::evaluateAcl;
 using diratlas::ldapcore::parseAcl;
 using diratlas::ldapcore::parseAclValues;
@@ -165,6 +166,26 @@ int main() {
         CHECK(evaluateAcl(rules, "gidNumber=1000+uidNumber=1000,cn=peercred,cn=external,cn=auth",
                           "cn=config", "*") == "manage");
         CHECK(evaluateAcl(rules, "uid=bob,ou=people,dc=x", "cn=config", "*") == "none");
+    }
+
+    // --- buildAclGraph: edges labelled with the conflict kind ---
+    {
+        auto rules = parseAclValues({
+            "to * by * read",
+            "to * by * none",
+            "to attrs=userPassword by * write",
+        });
+        auto conflicts = analyzeAclConflicts(rules);
+        std::string g = buildAclGraph(rules, conflicts);
+        CHECK(g.find("(no rules)") == std::string::npos);
+        CHECK(g.find("MASKED") != std::string::npos);
+        CHECK(g.find("[2] to *") != std::string::npos);
+        CHECK(g.find("[3] to attrs=userPassword") != std::string::npos);
+    }
+    // --- buildAclGraph: empty rules ---
+    {
+        std::string g = buildAclGraph({}, {});
+        CHECK(g.find("(no rules)") != std::string::npos);
     }
 
     if (failures == 0) {

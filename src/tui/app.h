@@ -105,9 +105,12 @@ private:
                     int &sel);
     /** @brief Show a modal keyboard-help popup; blocks until any key. */
     void showHelp();
-    /** @brief Show a modal popup with the decoded content of a value (e.g. base64). */
+    /** @brief Show a modal popup with the decoded content of a value (e.g. base64).
+     *  @param saveContent When non-empty, offers a "s=save" key that writes this
+     *         report text to a file (the popup then closes and logs the path). */
     void showValuePopup(const std::string &title, const std::string &content,
-                        const std::string &attrName, const std::string &dn);
+                        const std::string &attrName, const std::string &dn,
+                        const std::string &saveContent = "");
     /** @brief Modal multi-line text editor; returns true if confirmed (content updated). */
     bool editTextPopup(const std::string &title, std::string &content);
     /** @brief Validate a decoded ppm (pwdCheckModuleArg) config for syntax errors. */

@@ -65,4 +65,10 @@ std::string evaluateAcl(const std::vector<AclRule> &rules,
                         int *ruleIndex = nullptr,
                         int *clauseIndex = nullptr);
 
+/// ASCII graph of the relations between rules (which rule affects which
+/// later rule), derived from @p conflicts. One node per rule, one edge per
+/// conflict, labelled with the conflict kind.
+std::string buildAclGraph(const std::vector<AclRule> &rules,
+                          const std::vector<AclConflict> &conflicts);
+
 } // namespace diratlas::ldapcore
