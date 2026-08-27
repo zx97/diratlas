@@ -714,10 +714,19 @@ std::vector<AclConflict> analyzeAclConflicts(const std::vector<AclRule> &rules) 
             if (k) which += ",";
             which += " " + std::to_string(idxs[k]);
         }
-        out.push_back({AclConflictKind::Uncertain,
-                       static_cast<int>(idxs.front()),
-                       static_cast<int>(idxs.back()),
-                       which + " (" + kv.first + ") " + detail});
+        // With a single rule the group's target duplicates the row title
+        // ("[24] to dn.regex=... attrs=givenName"), so only attach it when
+        // several rules share it.
+        if (idxs.size() > 1)
+            out.push_back({AclConflictKind::Uncertain,
+                           static_cast<int>(idxs.front()),
+                           static_cast<int>(idxs.back()),
+                           which + " (" + kv.first + ") " + detail});
+        else
+            out.push_back({AclConflictKind::Uncertain,
+                           static_cast<int>(idxs.front()),
+                           static_cast<int>(idxs.back()),
+                           which + " " + detail});
     }
 
     // Pass 2 — fully modelled rules: masking / dead clauses only. Overlap in
