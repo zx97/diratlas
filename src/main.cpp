@@ -1512,24 +1512,48 @@ int main(int argc, char **argv) {
             std::cout << "\n";  // blank line between the bases
         }
 
-        // ── Suggested rewritten rules: the effective, conflict-free list ──
+        // ── Suggested rewritten rules: the effective, conflict-free list, as LDIF ──
         // Rules that are the target of a MASKED finding are dead (a broader
         // earlier rule always matches first) and are dropped; everything else
-        // is shown once, reformatted as a clean slapd-style rule.
+        // is emitted as a modify block ready to apply. The attribute name and
+        // the index style follow the grammar of the base's rules.
         std::cout << "\n"
                   << "══════════════════════════════════════════════════════════════════════════\n"
                   << "  SUGGESTED REWRITTEN RULES (no conflicts)\n"
+                  << "  LDIF blocks: apply with ldapmodify\n"
                   << "══════════════════════════════════════════════════════════════════════════\n";
         for (const auto &b : bases) {
-            std::cout << "  " << b.label << "\n";
+            const char *attr = "olcAccess";
+            const char *label = "olcAccess";
+            switch (b.rules.empty() ? diratlas::ldapcore::AclFormat::Slapd
+                                    : b.rules[0].format) {
+                case diratlas::ldapcore::AclFormat::Aci:
+                    attr = "aci"; label = "aci"; break;
+                case diratlas::ldapcore::AclFormat::Oracle:
+                    attr = "orclaci"; label = "orclaci"; break;
+                default:
+                    attr = "olcAccess"; label = "olcAccess"; break;
+            }
+            std::cout << "dn: " << b.label << "\n"
+                      << "changetype: modify\n"
+                      << "replace: " << attr << "\n";
+            size_t idx = 0;
             for (size_t i = 0; i < b.rules.size(); ++i) {
                 bool dead = false;
                 for (const auto &c : b.conflicts)
                     if (c.kind == diratlas::ldapcore::AclConflictKind::Masked &&
                         c.second == static_cast<int>(i)) { dead = true; break; }
                 if (dead) continue;
-                std::cout << "    " << diratlas::ldapcore::formatAclRule(b.rules[i]) << "\n";
+                // OpenLDAP keeps a {N} prefix per value and the rewritten form; ACI/Oracle
+                // lists must keep their native syntax ("access to ...",
+                // "(targetattr=...)(version 3.0 ...)"), so emit the raw value.
+                if (b.rules[i].format == diratlas::ldapcore::AclFormat::Slapd)
+                    std::cout << label << ": {" << idx++ << "}"
+                              << diratlas::ldapcore::formatAclRule(b.rules[i]) << "\n";
+                else
+                    std::cout << label << ": " << b.rules[i].raw << "\n";
             }
+            std::cout << "-\n\n";  // end of the modify block
         }
         return 0;
     }
