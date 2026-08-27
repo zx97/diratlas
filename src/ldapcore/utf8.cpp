@@ -59,19 +59,35 @@ std::string utf8Truncate(const std::string &s, int maxCols) {
 std::vector<std::string> utf8Wrap(const std::string &s, int maxCols) {
     std::vector<std::string> out;
     if (s.empty()) { out.push_back(""); return out; }
+    if (maxCols < 1) maxCols = 1;
     size_t i = 0;
     while (i < s.size()) {
+        // Build one line. Remember the last space so a long line can break
+        // at a word boundary instead of in the middle of a word.
+        size_t lineStart = i;
         std::string line;
         int cols = 0;
+        size_t lastSpace = std::string::npos;  // index into line (after a space)
         while (i < s.size()) {
             int len = 0;
             int cw = wcwidth(static_cast<wchar_t>(utf8Decode(s, i, &len)));
             if (cw < 0) cw = 1;
-            if (cols + cw > maxCols && cols > 0) break;
+            if (cols + cw > maxCols && cols > 0) {
+                if (lastSpace != std::string::npos && lastSpace < line.size()) {
+                    // Cut after the last space: line keeps chars before it,
+                    // i rewinds to just past that space.
+                    size_t keep = lastSpace;  // line[lastSpace] is the space
+                    i = lineStart + keep + 1;
+                    line = line.substr(0, keep);
+                }
+                break;
+            }
             line.append(s, i, static_cast<size_t>(len));
             cols += cw;
             i += static_cast<size_t>(len);
+            if (line.back() == ' ') lastSpace = line.size() - 1;
         }
+        if (!line.empty() && line.back() == ' ' && i < s.size()) line.pop_back();
         out.push_back(line);
     }
     return out;

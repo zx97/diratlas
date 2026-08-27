@@ -1103,14 +1103,21 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
         }
 
         // Conflicts / graph edges for this rule, drawn as rows of the box.
+        // Long details (grouped UNCERTAIN rule lists) wrap onto continuation
+        // lines instead of being truncated, so the content stays readable.
         for (size_t k = 0; k < byRule[i].size(); ++k) {
             bool last = (k + 1 == byRule[i].size());
-            // Keep the conflict row inside the box, at box width.
-            std::string cell = "\u2502  " + conflictLine(byRule[i][k], last);
-            if (diratlas::ldapcore::utf8Width(cell) > boxW - 1)
-                cell = diratlas::ldapcore::utf8Truncate(cell, boxW - 2) + "\u2026";
-            out += cell + padCols("", boxW - 1 - diratlas::ldapcore::utf8Width(cell)) +
-                   "\u2502\n";
+            std::string text = conflictLine(byRule[i][k], last);
+            const int prefix = 4;  // "│  " left border + "  " indent on wrap
+            int room = boxW - 1 - prefix;
+            if (room < 8) room = 8;
+            auto segs = diratlas::ldapcore::utf8Wrap(text, room);
+            for (size_t seg = 0; seg < segs.size(); ++seg) {
+                std::string cell = (seg == 0) ? "\u2502  " : "\u2502    ";
+                cell += segs[seg];
+                out += cell + padCols("", boxW - 1 - diratlas::ldapcore::utf8Width(cell)) +
+                       "\u2502\n";
+            }
         }
     }
 

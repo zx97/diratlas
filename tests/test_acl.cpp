@@ -416,7 +416,13 @@ int main() {
         auto c = analyzeAclConflicts(rules);
         std::string r = diratlas::ldapcore::buildAclReport(rules, c, true);
         CHECK(r.find("MASKED ──► [1] to attrs=userPassword") != std::string::npos);
-        CHECK(r.find("(rule 1 is fully covered by rule 0)") != std::string::npos);
+        // Long conflict details wrap onto continuation lines; every word of
+        // the detail must survive the wrap (words may split across lines,
+        // but nothing is truncated away).
+        std::string flat;
+        for (char ch : r) if (ch != '\n') flat += ch;
+        CHECK(flat.find("fully covered by rule") != std::string::npos);
+        CHECK(flat.find("0)") != std::string::npos);
         CHECK(r.find("✓") != std::string::npos);  // the rights table has a check cell
         // without withGraph: plain conflict text
         std::string r2 = diratlas::ldapcore::buildAclReport(rules, c);
