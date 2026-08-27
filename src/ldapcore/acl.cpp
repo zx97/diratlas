@@ -676,15 +676,23 @@ std::vector<AclConflict> analyzeAclConflicts(const std::vector<AclRule> &rules) 
     std::vector<AclConflict> out;
 
     // Pass 1 — complex targets (dn.regex, filter=, unknown forms): we cannot
-    // model them statically. Group rules by their complex DN target (the raw
-    // dn.regex/filter expression, without the per-rule attrs= list), so a
-    // dozen per-attribute rules sharing one regex yield a single "check
-    // manually" entry instead of one per rule.
+    // model them statically. Group rules by their complex DN target together
+    // with the attrs list, so a dozen per-attribute rules sharing one regex
+    // but disjoint attrs stay separate: an attrs=building rule cannot overlap
+    // an attrs=pwdPolicySubentry rule, so they must not be listed as one
+    // "rules 2, 3, ..." finding.
     std::map<std::string, std::vector<size_t>> complexByTarget;
     for (size_t i = 0; i < rules.size(); ++i)
         if (rules[i].targetComplex) {
             std::string key = rules[i].targetDn.empty() ? rules[i].target
                                                         : rules[i].targetDn;
+            if (!rules[i].targetAttrs.empty() && rules[i].targetAttrs[0] != "*") {
+                key += " attrs=";
+                for (size_t k = 0; k < rules[i].targetAttrs.size(); ++k) {
+                    if (k) key += ",";
+                    key += rules[i].targetAttrs[k];
+                }
+            }
             complexByTarget[key].push_back(i);
         }
     for (const auto &kv : complexByTarget) {

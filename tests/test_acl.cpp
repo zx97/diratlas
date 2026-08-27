@@ -585,6 +585,23 @@ int main() {
         CHECK(conflicts.empty());
     }
 
+    // Complex targets with the same regex but disjoint attrs are separate:
+// an attrs=building rule cannot overlap an attrs=cn rule, so they must
+// not be grouped into one "rules 0, 1, ..." finding.
+    {
+        auto conflicts = analyzeAclConflicts(parseAclValues({
+            "to dn.regex=ou=People,dc=(.+),dc=europa,dc=eu attrs=building by self read",
+            "to dn.regex=ou=People,dc=(.+),dc=europa,dc=eu attrs=cn by self read",
+            "to dn.regex=ou=People,dc=(.+),dc=europa,dc=eu attrs=building by users read",
+            "to dn.subtree=ou=People,dc=europa,dc=eu attrs=building by users read",
+        }));
+        // building rules (0, 2) group together and interact with rule 3;
+        // the attrs=cn rule (1) has no interacting later rule → not reported.
+        CHECK(conflicts.size() == 1);
+        CHECK(conflicts[0].detail.find("rules 0, 2") != std::string::npos);
+        CHECK(conflicts[0].detail.find("attrs=building") != std::string::npos);
+    }
+
     if (failures == 0) {
         std::cout << "test_acl: all checks passed" << std::endl;
         return 0;
