@@ -1017,17 +1017,16 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
                                : std::max(dims.boxW, tableW + 4);
 
     // Conflicts are rows of the box; build each line once for rendering.
-    auto conflictLine = [&](const AclConflict *c, bool last) -> std::string {
-        std::string line = std::string(last ? "\u2514\u2500 " : "\u251C\u2500 ");
+    // A conflict is not a by-clause, so it gets no ├─/└─ connector: one arrow
+    // points at the affected rule, the kind follows with a colon.
+    auto conflictLine = [&](const AclConflict *c) -> std::string {
         if (withGraph) {
-            line += std::string(kindName(c->kind)) + " \u2500\u2500\u25BA [" +
-                    std::to_string(c->second) + "] to " +
-                    rules[static_cast<size_t>(c->second)].target;
-            if (!c->detail.empty()) line += "  (" + c->detail + ")";
-        } else {
-            line += "! " + std::string(kindName(c->kind)) + " " + c->detail;
+            return std::string("\u2500\u2500\u25BA ") + kindName(c->kind) + ": [" +
+                   std::to_string(c->second) + "] to " +
+                   rules[static_cast<size_t>(c->second)].target +
+                   (c->detail.empty() ? "" : "  (" + c->detail + ")");
         }
-        return line;
+        return "! " + std::string(kindName(c->kind)) + " " + c->detail;
     };
 
     // ── One big box per base, rules linked by ├─ separators ──────
@@ -1106,8 +1105,8 @@ std::string buildAclReport(const std::vector<AclRule> &rules,
         // Long details (grouped UNCERTAIN rule lists) wrap onto continuation
         // lines instead of being truncated, so the content stays readable.
         for (size_t k = 0; k < byRule[i].size(); ++k) {
-            bool last = (k + 1 == byRule[i].size());
-            std::string text = conflictLine(byRule[i][k], last);
+            (void)k;
+            std::string text = conflictLine(byRule[i][k]);
             const int prefix = 4;  // "│  " left border + "  " indent on wrap
             int room = boxW - 1 - prefix;
             if (room < 8) room = 8;

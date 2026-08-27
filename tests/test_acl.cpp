@@ -415,7 +415,8 @@ int main() {
         });
         auto c = analyzeAclConflicts(rules);
         std::string r = diratlas::ldapcore::buildAclReport(rules, c, true);
-        CHECK(r.find("MASKED ──► [1] to attrs=userPassword") != std::string::npos);
+        // Conflicts use one arrow + kind with a colon (no by-clause connector).
+        CHECK(r.find("──► MASKED: [1] to attrs=userPassword") != std::string::npos);
         // Long conflict details wrap onto continuation lines; every word of
         // the detail must survive the wrap (words may split across lines,
         // but nothing is truncated away).
