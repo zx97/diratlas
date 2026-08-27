@@ -820,6 +820,18 @@ std::vector<std::string> formatAclValueLines(const std::string &value) {
     return out;
 }
 
+// Rebuild a parsed rule as one slapd-style line: "to <target> by <subject>
+// <rights> ...". Selectors (ssf=128, ...) are kept in front of the subject.
+std::string formatAclRule(const AclRule &rule) {
+    std::string out = "to " + rule.target;
+    for (const auto &cl : rule.bys) {
+        out += " by ";
+        if (!cl.selector.empty()) out += cl.selector + " ";
+        out += cl.subject + " " + cl.rights;
+    }
+    return out;
+}
+
 // Displayed subject of a by-clause: an optional connection selector (ssf=...,
 // peername=...) is shown before the subject (e.g. "ssf=128 self").
 static std::string displaySubject(const AclClause &cl) {

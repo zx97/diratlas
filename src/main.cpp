@@ -1511,6 +1511,26 @@ int main(int argc, char **argv) {
             }
             std::cout << "\n";  // blank line between the bases
         }
+
+        // ── Suggested rewritten rules: the effective, conflict-free list ──
+        // Rules that are the target of a MASKED finding are dead (a broader
+        // earlier rule always matches first) and are dropped; everything else
+        // is shown once, reformatted as a clean slapd-style rule.
+        std::cout << "\n"
+                  << "══════════════════════════════════════════════════════════════════════════\n"
+                  << "  SUGGESTED REWRITTEN RULES (no conflicts)\n"
+                  << "══════════════════════════════════════════════════════════════════════════\n";
+        for (const auto &b : bases) {
+            std::cout << "  " << b.label << "\n";
+            for (size_t i = 0; i < b.rules.size(); ++i) {
+                bool dead = false;
+                for (const auto &c : b.conflicts)
+                    if (c.kind == diratlas::ldapcore::AclConflictKind::Masked &&
+                        c.second == static_cast<int>(i)) { dead = true; break; }
+                if (dead) continue;
+                std::cout << "    " << diratlas::ldapcore::formatAclRule(b.rules[i]) << "\n";
+            }
+        }
         return 0;
     }
 

@@ -81,6 +81,10 @@ std::string evaluateAcl(const std::vector<AclRule> &rules,
 /// raw value is returned as a single line when there is no "by" clause.
 std::vector<std::string> formatAclValueLines(const std::string &value);
 
+/// Rebuild a parsed rule as a single "to <target> by <subject> <rights> ..."
+/// line (the suggested-rewrite form). Selectors are kept ("ssf=128 self").
+std::string formatAclRule(const AclRule &rule);
+
 /// Table dimensions used by buildAclReport(): the subject column width and
 /// the box width. Callers that render several rule sets in one report can
 /// compute the maxima across all of them and pass them as forcedSubjW /
