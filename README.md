@@ -55,10 +55,12 @@ OpenLDAP tools; GNU long options are also accepted):
     # slapacl-style evaluation: which rule/clause actually grants this user
 ./build/diratlas -Y EXTERNAL -H ldapi://%2fvar%2frun%2fslapd.sock \
     -b 'olcDatabase={1}mdb,cn=config' --acl-check --acl-graph
-    # show each conflict as a graph edge under its rule (MASKED ──► [n] to ...)
+    # show each conflict as a graph edge under its rule (──► MASKED: [n] to ...)
 ./build/diratlas -x -H ldap://oid.example.com:389 --acl-check -b ''
     # non-OpenLDAP server: aci / orclentrylevelaci (389 DS, Oracle), entryACI
     # (ApacheDS), AclEntry (eDirectory), ibm-aci (IBM) are auto-detected
+    # --acl-check ends with a "Suggested rewritten rules" LDIF section
+    # (dn: / changetype: modify / replace: <attr> / olcAccess: {N}to ...)
 ```
 
 See `diratlas --help` or `diratlas doc` for the full option reference.
@@ -102,8 +104,11 @@ are only used in TUI mode and never in `--cli` mode.
    │ App (event loop,│  │   RFC 4517:      │  │   SID, GUID,     │
    │  worker thread) │  │   GeneralizedTime│  │   UAC/flags,     │
    │ TreeWidget      │  │   durations,     │  │   NT timestamps, │
-   │ AttrsWidget     │  │   HEX/binary     │  │   100ns intervals│
-   └─────────────────┘  └──────────────────┘  └──────────────────┘
+   │ AttrsWidget     │  │   HEX/binary,    │  │   100ns intervals│
+   │                 │  │   ACL (olcAccess/│  └──────────────────┘
+   │                 │  │   aci/Oracle),   │
+   │                 │  │   DN, UTF-8      │
+   └─────────────────┘  └──────────────────┘
 ```
 
 ### Component responsibilities
@@ -115,7 +120,7 @@ are only used in TUI mode and never in `--cli` mode.
 | `src/ldaprc.*` | Read `/etc/ldap/ldap.conf`, `~/.ldaprc`, `./.ldaprc`; values only fill gaps left by CLI flags |
 | `src/vars.*` | Constants, flag maps (UAC, systemFlags, SD control…), emoji map, predefined queries |
 | `src/embedded.hpp` | Embedded AGPL-3.0 license and `doc` help text |
-| `src/ldapcore/` | Generic LDAP attribute formatting (RFC 4517 syntaxes) + byte helpers; **no AD knowledge** |
+| `src/ldapcore/` | Generic LDAP attribute formatting (RFC 4517 syntaxes) + byte helpers + **ACL analysis** (olcAccess/aci/Oracle parsing, conflict analysis, slapacl evaluation); **no AD knowledge** |
 | `src/ad/` | Active Directory attribute formatting; only activated when flavour is Microsoft AD |
 | `src/tui/` | ncurses interface: `App` (event loop/windows/menus), `TreeWidget` (browser), `AttrsWidget` (attribute panel) |
 
@@ -141,6 +146,8 @@ main()
   ├─ flavour: conn.guessFlavor()   RootDSE objectClass → MSAD | BasicLDAP
   ├─ base:    conn.findRootDN()    only if -b was not given
   │
+  ├─ [ --acl-check ] ──► ACL analysis (parse olcAccess/aci/Oracle rules,
+  │                      conflict analysis, boxed report, suggested LDIF) → exit
   ├─ [ --cli ]  ───────────► search loop (paging) → LDIF output → exit
   └─ [ TUI ]   ────────────► App::init(conn, filter, base, uri, bindId)
                              └─► App::run() event loop
@@ -377,9 +384,15 @@ ctest --test-dir build --output-on-failure
   the empty base so the tree still opens; exposed contexts that are not
   readable with the current bind stay visible (marked with ⚠️).
 - **ACL values** (`olcAccess`, `aci`, `orclentrylevelaci`, `entryACI`, ...): Enter opens a
-  popup showing the raw value with semantic syntax colours; the analysis
+  popup showing the raw value with semantic syntax colours. `--acl-check`
   reports real problems only — **masked rules** (never reached because an
-  earlier rule covers them), **dead clauses**, and **complex targets**
-  (`dn.regex`/`filter=`) grouped per target for manual review. Plain
-  overlapping rules are normal in slapd.access (first match wins), so they
-  are not reported. `s` saves the full report to `diratlas_acl_0001.txt`.
+  earlier rule covers them; slapd only, ACI/Oracle rules are additive), **dead
+  clauses**, and **complex targets** (`dn.regex`/`filter=`) grouped by regex
+  **and attrs** for manual review. The rights table adapts its columns to the
+  grammar (slapd levels, ACI flags, Oracle flags with ✗ for negated rights),
+  long conflict lines wrap instead of truncating, and the report ends with a
+  **Suggested rewritten rules** section: a ready-to-apply LDIF
+  (`changetype: modify / replace: olcAccess` with renumbered `{N}` indexes on
+  OpenLDAP, native `aci`/`orclaci` values on other servers). Plain overlapping
+  rules are normal in slapd.access (first match wins), so they are not
+  reported. `s` saves the full report to `diratlas_acl_0001.txt`.

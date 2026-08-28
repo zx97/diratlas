@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 Manuel FLURY
 //
-// ACL parsing and static conflict analysis for OpenLDAP olcAccess values
-// (slapd.access(5)). Pure string logic, no LDAP dependency, unit-testable.
+// ACL parsing and static conflict analysis across LDAP grammars: OpenLDAP
+// olcAccess (slapd.access(5)), 389 DS / Red Hat / PingDirectory / ApacheDS
+// ACI (version 3.0), and Oracle OID ("access to entry/attr=(...)"). Pure
+// string logic, no LDAP dependency, unit-testable.
 
 #pragma once
 
@@ -55,10 +57,11 @@ struct AclConflict {
     std::string detail;   ///< human-readable explanation
 };
 
-/// Parse a single olcAccess value into an AclRule (empty rule on failure).
+/// Parse a single ACL value (olcAccess, aci or Oracle OID) into an AclRule
+/// (empty rule on failure).
 AclRule parseAcl(const std::string &value);
 
-/// Parse several olcAccess values in order (index == position in the ACL list).
+/// Parse several ACL values in order (index == position in the ACL list).
 std::vector<AclRule> parseAclValues(const std::vector<std::string> &values);
 
 /// Static conflict analysis between rules, in evaluation order.
@@ -101,9 +104,10 @@ AclReportSize aclReportDimensions(const std::vector<AclRule> &rules,
 /// Build a readable text report of @p rules and their @p conflicts. All rules
 /// are drawn inside one big box: the first rule's title in the top border,
 /// following rules linked by ├─ separators, each rule followed by its
-/// by-clause table (access levels as columns, granted one marked with ✓) and
-/// its conflicts/graph edges as rows of the same box. When @p withGraph is
-/// true, findings are shown as graph edges ("MASKED ──► [n] to ...").
+/// by-clause table (grammar-appropriate access columns: slapd levels, ACI or
+/// Oracle flags — negated rights as ✗ — granted ones marked with ✓) and its
+/// conflicts/graph edges as rows of the same box. When @p withGraph is
+/// true, findings are shown as graph edges ("──► MASKED: [n] to ...").
 /// @p forcedSubjW / @p forcedBoxW let the caller impose a uniform table size
 /// across the whole report (see aclReportDimensions()); when negative, the
 /// values are computed from this rule set.

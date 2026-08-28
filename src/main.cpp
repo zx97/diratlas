@@ -471,7 +471,9 @@ ARCHITECTURE
              └─ AttrsWidget (attribute panel)
                      │ flavour-gated formatting
                      ├─ ad/*       (Microsoft AD: SID, GUID, flags, NT time)
-                     └─ ldapcore/* (generic: GeneralizedTime, durations, HEX)
+                     └─ ldapcore/* (generic: GeneralizedTime, durations, HEX,
+                                    ACL: olcAccess/aci/Oracle parsing,
+                                    conflict analysis, slapacl evaluation)
   Config: CLI flags > ldaprc (ldap.conf / ~/.ldaprc / ./.ldaprc)
 
 ───────────────────────────────────────────────────────────────
@@ -539,18 +541,26 @@ FLAGS (ldapsearch-compatible)
 
   ACL analysis:
     --acl-check        analyse the ACL rules of the -b entry and report
-                       problems: masked rules (never reached), dead
-                       clauses, complex targets (dn.regex/filter) grouped
-                       to check manually. ACL attributes are detected by
-                       server flavour: olcAccess (OpenLDAP), aci /
-                       orclentrylevelaci (389 DS / Red Hat / Oracle),
-                       entryACI / prescriptiveACI / subentryACI (ApacheDS),
+                       problems: masked rules (never reached; slapd only,
+                       ACI/Oracle rules are additive), dead clauses,
+                       complex targets (dn.regex/filter) grouped by regex
+                       and attrs to check manually. The rights table uses
+                       grammar-appropriate columns (slapd levels, ACI or
+                       Oracle flags, negated rights as ✗) and long conflict
+                       lines wrap. The report ends with a "Suggested
+                       rewritten rules" LDIF (changetype: modify /
+                       replace: olcAccess with renumbered {N} indexes on
+                       OpenLDAP; native aci/orclaci values elsewhere).
+                       ACL attributes are detected by server flavour:
+                       olcAccess (OpenLDAP), aci / orclentrylevelaci
+                       (389 DS / Red Hat / Oracle), entryACI /
+                       prescriptiveACI / subentryACI (ApacheDS),
                        AclEntry (eDirectory), ibm-aci (IBM SVDS)
     --acl-user <dn>    with --acl-check: simulate access for this user
                        (slapacl-style evaluation; first matching rule
                        and clause wins)
     --acl-graph        with --acl-check: show each conflict as a graph
-                       edge under its rule (MASKED ──► [n] to ...)
+                       edge under its rule (──► MASKED: [n] to ...)
 
 ───────────────────────────────────────────────────────────────
 KEYBOARD
