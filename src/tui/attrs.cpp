@@ -1057,6 +1057,8 @@ void drawAclValue(WINDOW *win, int y, int x, int maxW,
     static const std::set<std::string> rights = {
         "read", "write", "manage", "auth", "compare", "search",
         "add", "delete", "disclose", "proxy",
+        // Oracle OID flags (independent grants/denials)
+        "browse", "selfwrite", "export", "import",
     };
     static const std::set<std::string> selectors = {
         "dn", "dn.base", "dn.exact", "dn.one", "dn.subtree", "dn.children",
@@ -1109,6 +1111,12 @@ void drawAclValue(WINDOW *win, int y, int x, int maxW,
                 color = CP_STATUS_OK;
                 attr = A_BOLD;
             } else if (word == "none") {
+                color = CP_STATUS_ERR;
+                attr = A_BOLD;
+            } else if (word.size() > 2 && word.rfind("no", 0) == 0 &&
+                       rights.count(word.substr(2))) {
+                // Negated Oracle right (noadd, nodelete, nowrite, ...): a
+                // denial, shown in red like "none".
                 color = CP_STATUS_ERR;
                 attr = A_BOLD;
             } else if (selectors.count(word)) {
