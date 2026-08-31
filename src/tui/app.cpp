@@ -1498,9 +1498,10 @@ void App::showValuePopup(const std::string &title, const std::string &content,
     bool edited = false;
 
     for (;;) {
-        // Popup width: use most of the terminal for long ACL values instead of
-        // a fixed 72 columns (which wrapped rules mid-clause).
-        int cols = std::min(COLS - 4, 130);
+        // Popup width: use all available terminal columns (minus the frame
+        // and a small margin); long ACL clauses are wrapped, so a wider popup
+        // simply means fewer wrapped lines.
+        int cols = COLS - 2;
         if (cols < 60) cols = 60;
 
         // Split content into lines (preserving embedded newlines). Long physical
@@ -1545,14 +1546,22 @@ void App::showValuePopup(const std::string &title, const std::string &content,
             flush();
         }
 
-        // Popup sized to fit content, capped to the terminal.
-        int maxRows = LINES - 4;
+        // Popup sized to fit content, but confined to the attribute panel area:
+        // below the header/input line and above the status/log bars, so the
+        // menu bar, the input bar and the bottom hints stay visible.
+        int topPanel = HEADER_BAR_H + INPUT_BAR_H;             // first panel row
+        int panelBottom = LINES - STATUS_BAR_H - LOG_BAR_H;    // last panel row
+        int panelH = panelBottom - topPanel;
+        if (panelH < 3) panelH = 3;
+        int maxRows = panelH;
         int rows = std::min<int>(maxRows, static_cast<int>(lines.size()) + 5);
         if (rows < 7) rows = 7;
-        int sy = (LINES - rows) / 2;
+        int sy = topPanel + (panelH - rows) / 2;
         int sx = (COLS - cols) / 2;
-        if (sy < 0) sy = 0;
+        if (sy < topPanel) sy = topPanel;
         if (sx < 0) sx = 0;
+        if (sy + rows > panelBottom) sy = panelBottom - rows;
+        if (sy < topPanel) sy = topPanel;
 
         int scroll = 0;
         int contentH = rows - 3;
