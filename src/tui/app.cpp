@@ -1589,8 +1589,12 @@ void App::showValuePopup(const std::string &title, const std::string &content,
                     // would otherwise leave stale glyphs from the previous
                     // render ("frozen" left part while the end scrolls).
                     mvwhline(stdscr, fy, sx + 1, ' ', cols - 2);
+                    // Only scroll lines that overflow the viewport; short lines
+                    // (e.g. "to attrs=x") must stay fully visible, otherwise
+                    // they look wrapped/cut instead of just scrolled.
                     std::string seg = lines[i];
-                    if (hscroll < static_cast<int>(seg.size()))
+                    if (static_cast<int>(seg.size()) > cols - 2 &&
+                        hscroll < static_cast<int>(seg.size()))
                         seg = seg.substr(hscroll);
                     drawAclValue(stdscr, fy, sx + 1, cols - 2, seg, CP_ATTR_VALUE, A_NORMAL);
                 } else {
@@ -1637,16 +1641,20 @@ void App::showValuePopup(const std::string &title, const std::string &content,
                 for (const auto &l : lines)
                     if (static_cast<int>(l.size()) > maxH) maxH = static_cast<int>(l.size());
                 maxH = std::max(0, maxH - (cols - 2));
-                // Scroll by one "step", then snap to the next word boundary so
-                // the visible slice never starts mid-word — this keeps the ACL
-                // colouring correct and avoids a partial-word gap at the left.
+                // Snap to the next word boundary of the longest line: the
+                // short lines (a "to" clause) end early, so their spaces must
+                // not constrain the snap — otherwise the long "by ..." lines
+                // would still be cut mid-word and mis-coloured.
+                const std::string &snapLine = lines.empty() ? "" : *std::max_element(
+                    lines.begin(), lines.end(),
+                    [](const std::string &a, const std::string &b) {
+                        return a.size() < b.size();
+                    });
                 auto snap = [&](int pos) {
                     if (pos <= 0) return 0;
-                    // Advance to the whitespace after the word covering pos.
-                    auto target = lines.empty() ? 0 : lines[0];
                     size_t best = std::string::npos;
-                    for (size_t k = 1; k < target.size(); ++k)
-                        if (target[k] == ' ' && static_cast<int>(k) >= pos) {
+                    for (size_t k = 1; k < snapLine.size(); ++k)
+                        if (snapLine[k] == ' ' && static_cast<int>(k) >= pos) {
                             best = k + 1; break;
                         }
                     return (best == std::string::npos) ? pos : static_cast<int>(best);
