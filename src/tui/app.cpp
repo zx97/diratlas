@@ -1172,7 +1172,19 @@ void App::handleKey(int ch) {
         if (attrs_->goToDN_.find("ACLVIEW:") == 0) {
             std::string attr = attrs_->goToDN_.substr(8);
             attrs_->goToDN_.clear();
-            auto vals = attrs_->getAttrValues(attr);
+            // Merged view: every ACL attribute of the entry (orclaci +
+            // orclentrylevelaci + aci + olcAccess ...) is analysed together,
+            // because Oracle evaluates entry-level and prescriptive rules
+            // additively — a single attribute would hide inter-attribute
+            // conflicts. Each rule keeps its origin attribute.
+            auto pairs = attrs_->getAclValuesMerged();
+            std::vector<std::string> vals;
+            std::vector<std::string> origins;
+            for (const auto &[an, v] : pairs) {
+                vals.push_back(v);
+                origins.push_back(an);
+            }
+            if (vals.empty()) { setLog("No ACL values on " + currentDN_); return; }
             auto rules = diratlas::ldapcore::parseAclValues(vals);
             auto conflicts = diratlas::ldapcore::analyzeAclConflicts(rules);
             // The popup shows the raw ACL values with syntax colours, one
@@ -1181,6 +1193,8 @@ void App::handleKey(int ch) {
             std::string content;
             for (size_t v = 0; v < vals.size(); ++v) {
                 if (v) content += "\n";
+                // Prefix with the origin attribute so the source is visible.
+                content += "[" + origins[v] + "] ";
                 auto fl = diratlas::ldapcore::formatAclValueLines(vals[v]);
                 if (fl.empty()) { content += vals[v]; continue; }
                 for (size_t k = 0; k < fl.size(); ++k) {
@@ -1204,7 +1218,10 @@ void App::handleKey(int ch) {
                               diratlas::ldapcore::evaluateAcl(rules, u, currentDN_, "*") + "\n";
                 }
             }
-            showValuePopup("ACL " + attr, content, "", currentDN_, report, true);
+            std::string title = "ACL " + attr;
+            if (origins.size() > 1) title = "ACL (merged: " + origins[0] + " +" +
+                                           std::to_string(origins.size() - 1) + ")";
+            showValuePopup(title, content, "", currentDN_, report, true);
         } else if (attrs_->goToDN_.find("VIEWFULL:") == 0) {
             std::string rest = attrs_->goToDN_.substr(9);
             attrs_->goToDN_.clear();

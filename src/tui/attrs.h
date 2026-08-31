@@ -188,6 +188,10 @@ public:
     std::vector<std::string> getAttrValues(const std::string &attr) const {
         return entry_.getAttrs(attr);
     }
+    /** @brief All ACL/ACI values of every ACL attribute of the displayed
+     *         entry, flattened in entry attribute order. Each entry of the
+     *         returned pairs is (attribute name, value). */
+    std::vector<std::pair<std::string, std::string>> getAclValuesMerged() const;
 
     /** @brief Set the server flavour; gates AD-specific attribute formatting. */
     void setFlavor(LDAPFlavor flavor) { flavor_ = flavor; }

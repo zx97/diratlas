@@ -1024,6 +1024,22 @@ static bool isAclAttr(const std::string &name) {
            name == "acientry" || name == "ibm-aci";
 }
 
+std::vector<std::pair<std::string, std::string>> AttrsWidget::getAclValuesMerged() const {
+    std::vector<std::pair<std::string, std::string>> out;
+    // Walk the entry's attributes in display order; any ACL-bearing attribute
+    // contributes its values so the whole access policy of the entry is seen
+    // at once (orclaci prescriptive + orclentrylevelaci + aci + olcAccess...).
+    for (const auto &an : entry_.attributeNames) {
+        std::string ln;
+        for (char c : an)
+            ln += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (!isAclAttr(ln)) continue;
+        for (const auto &v : entry_.getAttrs(an))
+            out.emplace_back(an, v);
+    }
+    return out;
+}
+
 /**
  * @brief Syntax-highlight an ACL value (olcAccess / aci / orclaci /
  *        orclentrylevelaci).
