@@ -1498,11 +1498,21 @@ void App::showValuePopup(const std::string &title, const std::string &content,
     bool edited = false;
 
     for (;;) {
-        // Popup width: use all available terminal columns (minus the frame
-        // and a small margin); long ACL clauses are wrapped, so a wider popup
-        // simply means fewer wrapped lines.
-        int cols = COLS - 2;
+        // Popup width: fit the content (widest line + frame) but never exceed
+        // the available terminal width. A short value therefore gets a compact
+        // popup instead of one stretched across the whole screen.
+        int contentW = 0;
+        {
+            std::string::size_type pos = 0, eol;
+            while ((eol = content.find('\n', pos)) != std::string::npos) {
+                contentW = std::max(contentW, static_cast<int>(eol - pos));
+                pos = eol + 1;
+            }
+            contentW = std::max(contentW, static_cast<int>(content.size() - pos));
+        }
+        int cols = contentW + 4;  // frame + padding
         if (cols < 60) cols = 60;
+        if (cols > COLS - 2) cols = COLS - 2;
 
         // Split content into lines (preserving embedded newlines). Long physical
         // lines are wrapped to the popup width so nothing is hidden off-screen.
@@ -1737,13 +1747,24 @@ bool App::editTextPopup(const std::string &title, std::string &content) {
     }
     if (lines.empty()) lines.push_back("");
 
-    const int cols = 72;
-    const int rows = LINES - 6;
-    if (rows < 8) { timeout(100); return false; }
-    int sy = (LINES - rows) / 2;
+    // Size to content (widest line + frame) but never wider than the
+    // terminal; the height is confined to the attribute panel area so the
+    // menu/input bars and the bottom hints stay visible.
+    int contentW = 0;
+    for (const auto &l : lines)
+        contentW = std::max(contentW, static_cast<int>(l.size()));
+    const int cols = std::min(std::max(contentW + 4, 72), COLS - 2);
+    int topPanel = HEADER_BAR_H + INPUT_BAR_H;
+    int panelBottom = LINES - STATUS_BAR_H - LOG_BAR_H;
+    int panelH = panelBottom - topPanel;
+    if (panelH < 8) panelH = 8;
+    const int rows = std::min(panelH, static_cast<int>(lines.size()) + 6);
+    int sy = topPanel + (panelH - rows) / 2;
     int sx = (COLS - cols) / 2;
-    if (sy < 0) sy = 0;
+    if (sy < topPanel) sy = topPanel;
     if (sx < 0) sx = 0;
+    if (sy + rows > panelBottom) sy = panelBottom - rows;
+    if (sy < topPanel) sy = topPanel;
     const int contentH = rows - 3;
 
     int curLine = 0;
@@ -1975,12 +1996,23 @@ int App::appPopupForm(const std::string &title,
     timeout(-1);  // blocking input for the popup
 
     int rows = static_cast<int>(fields.size()) + 4 + (checkbox ? 1 : 0);
-    int cols = 50;
-    int sy = (LINES - rows) / 2;
+    // Width fits the longest label+value, so long values (DNs, ACLs) are
+    // editable without horizontal squeezing; never exceeds the terminal.
+    int contentW = 0;
+    for (const auto &f : fields)
+        contentW = std::max(contentW, static_cast<int>(f.first.size() + f.second->size()) + 6);
+    int cols = std::min(std::max(contentW, 50), COLS - 2);
+    int topPanel = HEADER_BAR_H + INPUT_BAR_H;
+    int panelBottom = LINES - STATUS_BAR_H - LOG_BAR_H;
+    int panelH = panelBottom - topPanel;
+    if (panelH < 5) panelH = 5;
+    if (rows > panelH) rows = panelH;
+    int sy = topPanel + (panelH - rows) / 2;
     int sx = (COLS - cols) / 2;
-    if (sy < 0) sy = 0;
+    if (sy < topPanel) sy = topPanel;
     if (sx < 0) sx = 0;
-    if (sy + rows >= LINES) rows = LINES - sy - 1;
+    if (sy + rows > panelBottom) sy = panelBottom - rows;
+    if (sy < topPanel) sy = topPanel;
     if (rows < 5) rows = 5;
 
     // Value display area: [sx+20 .. sx+cols-2)
