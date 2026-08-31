@@ -1583,8 +1583,8 @@ void App::showValuePopup(const std::string &title, const std::string &content,
             for (int i = scroll; i < lineEnd && fy < sy + rows - 1; i++, fy++) {
                 if (aclHighlight) {
                     // One rule per set of lines, never wrapped: horizontal
-                    // scroll reveals what does not fit. drawAclValue skips the
-                    // partial first word so colours never shift with hscroll.
+                    // scroll reveals what does not fit; hscroll is snapped to word
+                    // boundaries by the key handler so colours stay correct.
                     // Clear the whole row first: a shorter slice under hscroll
                     // would otherwise leave stale glyphs from the previous
                     // render ("frozen" left part while the end scrolls).
@@ -1592,7 +1592,7 @@ void App::showValuePopup(const std::string &title, const std::string &content,
                     std::string seg = lines[i];
                     if (hscroll < static_cast<int>(seg.size()))
                         seg = seg.substr(hscroll);
-                    drawAclValue(stdscr, fy, sx + 1, cols - 2, seg, CP_ATTR_VALUE, A_NORMAL, hscroll);
+                    drawAclValue(stdscr, fy, sx + 1, cols - 2, seg, CP_ATTR_VALUE, A_NORMAL);
                 } else {
                     mvwaddstr(stdscr, fy, sx + 1, lines[i].c_str());
                 }
@@ -1637,8 +1637,22 @@ void App::showValuePopup(const std::string &title, const std::string &content,
                 for (const auto &l : lines)
                     if (static_cast<int>(l.size()) > maxH) maxH = static_cast<int>(l.size());
                 maxH = std::max(0, maxH - (cols - 2));
-                if (ch == KEY_LEFT && hscroll > 0) hscroll -= 8;
-                if (ch == KEY_RIGHT && hscroll < maxH) hscroll += 8;
+                // Scroll by one "step", then snap to the next word boundary so
+                // the visible slice never starts mid-word — this keeps the ACL
+                // colouring correct and avoids a partial-word gap at the left.
+                auto snap = [&](int pos) {
+                    if (pos <= 0) return 0;
+                    // Advance to the whitespace after the word covering pos.
+                    auto target = lines.empty() ? 0 : lines[0];
+                    size_t best = std::string::npos;
+                    for (size_t k = 1; k < target.size(); ++k)
+                        if (target[k] == ' ' && static_cast<int>(k) >= pos) {
+                            best = k + 1; break;
+                        }
+                    return (best == std::string::npos) ? pos : static_cast<int>(best);
+                };
+                if (ch == KEY_LEFT && hscroll > 0) hscroll = snap(hscroll - 8);
+                if (ch == KEY_RIGHT && hscroll < maxH) hscroll = snap(hscroll + 8);
                 if (ch == KEY_HOME) hscroll = 0;
                 if (ch == KEY_END) hscroll = maxH;
             }
