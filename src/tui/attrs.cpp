@@ -1261,8 +1261,8 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
                     wattron(win, COLOR_PAIR(CP_TREE_CURSOR) | A_BOLD);
                     mvwaddch(win, y, 0, '>');
                     std::string nm = row.isToggle ? "" : row.name;
-                    if (static_cast<int>(nm.size()) > nameW - 1)
-                        nm = nm.substr(0, nameW - 1);
+                    if (static_cast<int>(nm.size()) > nameW)
+                        nm = nm.substr(0, nameW);
                     mvwaddstr(win, y, 1, nm.c_str());
                     // Fill remaining name area with cursor background
                     for (int c = 1 + static_cast<int>(nm.size()); c < nameW; c++)
@@ -1272,8 +1272,8 @@ void AttrsWidget::draw(WINDOW *win, bool focused) {
                     mvwaddch(win, y, 0, ' ');
                     wattron(win, COLOR_PAIR(nameColor) | nameAttr);
                     std::string nm = row.isToggle ? "" : row.name;
-                    if (static_cast<int>(nm.size()) > nameW - 1)
-                        nm = nm.substr(0, nameW - 1);
+                    if (static_cast<int>(nm.size()) > nameW)
+                        nm = nm.substr(0, nameW);
                     mvwaddstr(win, y, 1, nm.c_str());
                     wattroff(win, COLOR_PAIR(nameColor) | nameAttr);
                 }
