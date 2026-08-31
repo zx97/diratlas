@@ -1053,7 +1053,8 @@ std::vector<std::pair<std::string, std::string>> AttrsWidget::getAclValuesMerged
  *   - quoted strings        → green
  */
 void drawAclValue(WINDOW *win, int y, int x, int maxW,
-                  const std::string &val, int defaultColor, attr_t defaultAttr) {
+                  const std::string &val, int defaultColor, attr_t defaultAttr,
+                  int startCol) {
     static const std::set<std::string> rights = {
         "read", "write", "manage", "auth", "compare", "search",
         "add", "delete", "disclose", "proxy",
@@ -1078,6 +1079,23 @@ void drawAclValue(WINDOW *win, int y, int x, int maxW,
     };
     size_t i = 0;
     int cx = x;
+    // Horizontal scroll: advance past startCol columns without drawing, then
+    // back up to the start of the word straddling startCol so that word is
+    // coloured in full — a truncated token (e.g. "owse" from "browse") would
+    // otherwise be seen as unknown and left uncoloured.
+    if (startCol > 0) {
+        int cols = 0;
+        while (i < val.size() && cols < startCol) {
+            size_t len = 1;
+            if (static_cast<unsigned char>(val[i]) >= 0x80)
+                len = static_cast<size_t>(utf8Decode(val, i, nullptr));
+            cols += 1;
+            i += len;
+        }
+        // Back up to the whitespace before the word covering startCol.
+        size_t wb = val.find_last_of(" \t", i);
+        if (wb != std::string::npos && wb < i) i = wb + 1;
+    }
     while (i < val.size() && cx < x + maxW) {
         if (val[i] == ' ' || val[i] == '\t') {
             int ws = 0;

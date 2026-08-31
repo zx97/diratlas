@@ -1583,20 +1583,14 @@ void App::showValuePopup(const std::string &title, const std::string &content,
             for (int i = scroll; i < lineEnd && fy < sy + rows - 1; i++, fy++) {
                 if (aclHighlight) {
                     // One rule per set of lines, never wrapped: horizontal
-                    // scroll reveals what does not fit; hscroll is snapped to word
-                    // boundaries by the key handler so colours stay correct.
-                    // Clear the whole row first: a shorter slice under hscroll
-                    // would otherwise leave stale glyphs from the previous
-                    // render ("frozen" left part while the end scrolls).
+                    // scroll reveals what does not fit. The full line is drawn
+                    // with startCol=hscroll so the word straddling the scroll
+                    // position is coloured in full (never a truncated token).
+                    // Clear the row first so a shorter visible slice does not
+                    // leave stale glyphs from the previous render.
                     mvwhline(stdscr, fy, sx + 1, ' ', cols - 2);
-                    // Only scroll lines that overflow the viewport; short lines
-                    // (e.g. "to attrs=x") must stay fully visible, otherwise
-                    // they look wrapped/cut instead of just scrolled.
-                    std::string seg = lines[i];
-                    if (static_cast<int>(seg.size()) > cols - 2 &&
-                        hscroll < static_cast<int>(seg.size()))
-                        seg = seg.substr(hscroll);
-                    drawAclValue(stdscr, fy, sx + 1, cols - 2, seg, CP_ATTR_VALUE, A_NORMAL);
+                    drawAclValue(stdscr, fy, sx + 1, cols - 2, lines[i],
+                                 CP_ATTR_VALUE, A_NORMAL, hscroll);
                 } else {
                     mvwaddstr(stdscr, fy, sx + 1, lines[i].c_str());
                 }
