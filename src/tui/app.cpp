@@ -1027,6 +1027,21 @@ void App::handleKey(int ch) {
                 std::string attr = pendingEditAttr_;
                 std::string oldV = pendingEditOld_;
                 std::string newV = pendingEditNew_;
+                // Validate the edited value against the attribute syntax
+                // before sending it; unknown syntaxes are skipped.
+                if (attrSchema_.defs.empty())
+                    attrSchema_ = loadAttrSchema(*conn_);
+                std::string attrLower;
+                for (char c : attr)
+                    attrLower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                std::string editErr = attrSchema_.validateValue(attrLower, newV);
+                if (!editErr.empty()) {
+                    setLog("Edit rejected: '" + newV.substr(0, 60) + "' — " + editErr);
+                    pendingEditAttr_.clear();
+                    pendingEditNew_.clear();
+                    pendingEditOld_.clear();
+                    return;
+                }
                 auto allVals = attrs_->getAttrValues(attr);
                 bool braced = !allVals.empty();
                 for (const auto &v : allVals)
@@ -2272,6 +2287,34 @@ void App::appAttrDuplicateValue() {
     };
     if (appPopupForm("Duplicate Value", fields, nullptr) == 0) { setLog("Duplicate value cancelled"); return; }
     if (newVal.empty()) { setLog("Duplicate value: empty value"); return; }
+
+    // Reject an exact duplicate of an existing value before sending it.
+    // Equality follows the attribute's matching rule (case-sensitive for
+    // caseExactMatch, case-insensitive for caseIgnoreMatch); when the schema
+    // is unknown we fall back to an exact compare.
+    if (attrSchema_.defs.empty())
+        attrSchema_ = loadAttrSchema(*conn_);
+    std::string attrLower;
+    for (char c : attr)
+        attrLower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    bool cs = attrSchema_.caseSensitive(attrLower);
+    std::vector<std::string> existing = attrs_ ? attrs_->getAttrValues(attr) : std::vector<std::string>{};
+    for (const auto &e : existing) {
+        bool same = cs ? (e == newVal) : true;
+        if (!cs) {
+            std::string a = e, b = newVal;
+            for (auto &c : a) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            for (auto &c : b) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            same = (a == b);
+        }
+        if (same) { setLog("Duplicate value rejected: value already exists for " + attr); return; }
+    }
+    std::string syntaxErr = attrSchema_.validateValue(attrLower, newVal);
+    if (!syntaxErr.empty()) {
+        setLog("Duplicate value rejected: '" + newVal.substr(0, 60) + "' — " + syntaxErr);
+        return;
+    }
+
     runWriteOp([this, dn, attr, newVal]() {
                    return conn_->addAttribute(dn, attr, {newVal});
                },
@@ -2567,6 +2610,18 @@ void App::appAddAttr(const std::string &presetName) {
             ocList += ocs[i];
         }
         setLog("Add rejected: '" + attrName + "' is not allowed by objectClass (" + ocList + ")");
+        return;
+    }
+
+    // Validate the value against the attribute syntax (Integer, Boolean,
+    // time, DN, ...) before sending it; unknown syntaxes are skipped so a
+    // server whose schema is not fully published is not wrongly blocked.
+    if (attrSchema_.defs.empty())
+        attrSchema_ = loadAttrSchema(*conn_);
+    std::string syntaxErr = attrSchema_.validateValue(lower, attrValue);
+    if (!syntaxErr.empty()) {
+        setLog("Add rejected: '" + attrValue.substr(0, 60) + "' for " + attrName +
+               " — " + syntaxErr);
         return;
     }
 

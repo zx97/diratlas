@@ -92,11 +92,30 @@ OCSchemaInfo loadOCSchema(LDAPConn &conn);
 /**
  * @brief Schema information about attribute types, loaded from the subschema
  *        `attributeTypes` (RFC 4512). Used to decide which operations are
- *        allowed on a value (e.g. duplicate / add only if multi-valued).
+ *        allowed on a value (e.g. duplicate / add only if multi-valued) and
+ *        to validate / compare values (matching rule, syntax).
  */
 struct AttrSchemaInfo {
     /// attributeType name (lower-case) → parsed definition.
     std::map<std::string, std::string> defs;
+    /// attributeType name (lower-case) → EQUALITY matching rule name/OID.
+    std::map<std::string, std::string> equality;
+    /// attributeType name (lower-case) → SUBSTR matching rule name/OID.
+    std::map<std::string, std::string> substr;
+    /// attributeType name (lower-case) → SYNTAX OID.
+    std::map<std::string, std::string> syntax;
+    /// attributeType name (lower-case) → numeric OID.
+    std::map<std::string, std::string> oid;
+    /// attributeType name (lower-case) → SUP parent (for inherited
+    /// EQUALITY/SYNTAX/SUBSTR, e.g. cn SUP name).
+    std::map<std::string, std::string> sup;
+    /// ldapSyntaxes OID → human description ("Directory String", ...).
+    std::map<std::string, std::string> syntaxDesc;
+    /// matchingRules name (lower-case) → definition (OID, SYNTAX, ...).
+    std::map<std::string, std::string> matchingRules;
+    /// matchingRuleUse: attribute type (lower-case) → matching rule names.
+    std::map<std::string, std::set<std::string>> matchingRuleUse;
+
     /// Whether the named type is defined in the subschema.
     bool known(const std::string &lowerType) const { return defs.count(lowerType) > 0; }
     /// Whether the attribute is SINGLE-VALUE (default: false when unknown).
@@ -106,8 +125,25 @@ struct AttrSchemaInfo {
     /// Whether the attribute is operational per RFC 4512 (USAGE
     /// directoryOperation / distributedOperation / dSAOperation).
     bool operational(const std::string &lowerType) const;
+    /// Whether value comparisons are case-sensitive, from the EQUALITY
+    /// matching rule (caseExactMatch → true, caseIgnoreMatch → false,
+    /// unknown → false so equal values are not wrongly distinct).
+    bool caseSensitive(const std::string &lowerType) const;
+    /// Whether the attribute supports substring matching (SUBSTR present or
+    /// listed in matchingRuleUse with a substring rule).
+    bool supportsSubstring(const std::string &lowerType) const;
+    /// Human-readable syntax name of the attribute ("Directory String",
+    /// "Integer", ...), from SYNTAX OID + ldapSyntaxes. Empty when unknown.
+    std::string syntaxName(const std::string &lowerType) const;
+    /// Validate a value against the attribute syntax before sending it to the
+    /// server. Returns "" when acceptable (or syntax unknown), otherwise a
+    /// short human-readable reason.
+    std::string validateValue(const std::string &lowerType,
+                              const std::string &value) const;
 };
-/** @brief Load attributeTypes from the server subschema. */
+/** @brief Load attributeTypes, ldapSyntaxes, matchingRules and matchingRuleUse
+ *         from the server subschema. Returns empty maps when the subschema is
+ *         unreachable so callers degrade gracefully. */
 AttrSchemaInfo loadAttrSchema(LDAPConn &conn);
 
 /**

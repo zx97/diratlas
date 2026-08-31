@@ -1653,21 +1653,267 @@ bool AttrSchemaInfo::operational(const std::string &lowerType) const {
            d.find("USAGE dSAOperation") != std::string::npos;
 }
 
+bool AttrSchemaInfo::caseSensitive(const std::string &lowerType) const {
+    // Resolve through the SUP chain (cn → name) for inherited EQUALITY.
+    std::string type = lowerType;
+    std::string eq;
+    for (int hop = 0; hop < 8 && !type.empty(); ++hop) {
+        auto it = equality.find(type);
+        if (it != equality.end() && !it->second.empty()) { eq = it->second; break; }
+        auto supIt = sup.find(type);
+        type = (supIt == sup.end()) ? "" : supIt->second;
+    }
+    if (eq.empty()) return false;
+    std::string low;
+    for (char c : eq)
+        low += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    // caseExactMatch (and friends) preserve case; caseIgnoreMatch ignores it.
+    // Unknown rules default to case-insensitive so equal values are treated
+    // as duplicates (the server would reject them anyway).
+    if (low.find("caseexact") != std::string::npos ||
+        low.find("octetstringmatch") != std::string::npos ||
+        low.find("integer") != std::string::npos ||
+        low.find("boolean") != std::string::npos ||
+        low.find("caseexactia5") != std::string::npos)
+        return true;
+    return false;
+}
+
+bool AttrSchemaInfo::supportsSubstring(const std::string &lowerType) const {
+    // Resolve through the SUP chain (cn → name) for inherited SUBSTR.
+    std::string type = lowerType;
+    for (int hop = 0; hop < 8 && !type.empty(); ++hop) {
+        auto it = substr.find(type);
+        if (it != substr.end() && !it->second.empty()) return true;
+        auto supIt = sup.find(type);
+        type = (supIt == sup.end()) ? "" : supIt->second;
+    }
+    // Fall back to matchingRuleUse: it is keyed by rule → attrs; any rule
+    // whose name mentions substring and lists this attribute qualifies.
+    for (const auto &kv : matchingRuleUse) {
+        if (kv.first.find("substr") == std::string::npos) continue;
+        if (kv.second.count(lowerType)) return true;
+    }
+    return false;
+}
+
+std::string AttrSchemaInfo::syntaxName(const std::string &lowerType) const {
+    // Resolve through the SUP chain for inherited SYNTAX.
+    std::string type = lowerType;
+    std::string oid;
+    for (int hop = 0; hop < 8 && !type.empty(); ++hop) {
+        auto it = syntax.find(type);
+        if (it != syntax.end() && !it->second.empty()) { oid = it->second; break; }
+        auto supIt = sup.find(type);
+        type = (supIt == sup.end()) ? "" : supIt->second;
+    }
+    if (oid.empty()) return "";
+    auto d = syntaxDesc.find(oid);
+    if (d == syntaxDesc.end()) return "";
+    return d->second;
+}
+
+std::string AttrSchemaInfo::validateValue(const std::string &lowerType,
+                                          const std::string &value) const {
+    // Resolve through the SUP chain for inherited SYNTAX.
+    std::string type = lowerType;
+    std::string oid;
+    for (int hop = 0; hop < 8 && !type.empty(); ++hop) {
+        auto it = syntax.find(type);
+        if (it != syntax.end() && !it->second.empty()) { oid = it->second; break; }
+        auto supIt = sup.find(type);
+        type = (supIt == sup.end()) ? "" : supIt->second;
+    }
+    if (oid.empty()) return "";  // unknown → skip
+    // RFC 4517 §3 syntaxes, by their OID (the common ones).
+    // Directory String / IA5 String / Printable String / Octet String: free text.
+    if (oid == "1.3.6.1.4.1.1466.115.121.1.15" ||  // Directory String
+        oid == "1.3.6.1.4.1.1466.115.121.1.26" ||  // IA5 String
+        oid == "1.3.6.1.4.1.1466.115.121.1.44" ||  // Printable String
+        oid == "1.3.6.1.4.1.1466.115.121.1.40" ||  // Octet String
+        oid == "1.3.6.1.4.1.1466.115.121.1.58" ||  // Substring Assertion
+        oid == "1.3.6.1.4.1.1466.115.121.1.7")     // Boolean (handled below)
+        return "";
+    if (oid == "1.3.6.1.4.1.1466.115.121.1.7") {  // Boolean
+        std::string low = value;
+        for (auto &c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (low == "true" || low == "false" || low == "1" || low == "0") return "";
+        return "expected TRUE or FALSE";
+    }
+    if (oid == "1.3.6.1.4.1.1466.115.121.1.27") {  // Integer
+        if (value.empty()) return "empty integer";
+        for (char c : value)
+            if (c != '-' && (c < '0' || c > '9'))
+                return "expected an integer";
+        return "";
+    }
+    if (oid == "1.3.6.1.4.1.1466.115.121.1.24" ||  // GeneralizedTime
+        oid == "1.3.6.1.4.1.1466.115.121.1.53") {  // UTC Time
+        // YYYYMMDDHH[MM[SS]][(.ddd)|Z|±hhmm] — basic sanity: starts with 8 digits.
+        if (value.size() < 8) return "expected a time value (YYYYMMDD...)";
+        for (size_t k = 0; k < 8; ++k)
+            if (value[k] < '0' || value[k] > '9')
+                return "expected a time value (YYYYMMDD...)";
+        return "";
+    }
+    if (oid == "1.3.6.1.4.1.1466.115.121.1.12") {  // DN
+        if (value.empty()) return "empty DN";
+        // Rough sanity: must contain at least one "name=value" pair.
+        if (value.find('=') == std::string::npos)
+            return "expected a DN (name=value,...)";
+        return "";
+    }
+    return "";  // other syntaxes: no local validation
+}
+
+// Extract a single-quoted NAME from an attributeType/matchingRule definition,
+// falling back to a bare OID when no NAME is present (RFC 4512 §4.1.2).
+static std::string schemaTypeName(const std::string &def) {
+    auto namePos = def.find(" NAME ");
+    if (namePos != std::string::npos) {
+        namePos += 6;
+        auto q = def.find_first_of("'\"", namePos);
+        if (q != std::string::npos) {
+            char quote = def[q];
+            auto end = def.find(quote, q + 1);
+            if (end != std::string::npos)
+                return def.substr(q + 1, end - q - 1);
+        }
+    }
+    auto p = def.find('(');
+    if (p == std::string::npos) return "";
+    p = def.find_first_not_of(" \t(", p);
+    if (p == std::string::npos) return "";
+    auto end = def.find_first_of(" \t", p);
+    if (end == std::string::npos) return def.substr(p);
+    return def.substr(p, end - p);
+}
+
+// Extract the OID that follows a keyword ("EQUALITY x", "SYNTAX x", ...).
+// The value may carry a length constraint ("SYNTAX 1.3.6...1.15{32768}"),
+// so stop at whitespace or '{'.
+static std::string schemaKeywordValue(const std::string &def, const char *kw) {
+    std::string needle = std::string(" ") + kw + " ";
+    auto p = def.find(needle);
+    if (p == std::string::npos) return "";
+    p += needle.size();
+    auto q = def.find_first_not_of(" \t", p);
+    if (q == std::string::npos) return "";
+    auto end = def.find_first_of(" \t{", q);
+    if (end == std::string::npos) return def.substr(q);
+    return def.substr(q, end - q);
+}
+
+// Extract every NAME from a definition. RFC 4512 §4.1.2 allows a
+// multi-valued NAME as a parenthesised space-separated list:
+//   NAME 'cn'               → { "cn" }
+//   NAME ( 'cn' 'commonName' ) → { "cn", "commonName" }
+// The $ separator belongs to MUST/MAY lists, not to NAME.
+static std::vector<std::string> schemaAllNames(const std::string &def) {
+    std::vector<std::string> out;
+    auto namePos = def.find(" NAME ");
+    if (namePos == std::string::npos) return out;
+    namePos += 6;
+    size_t pos = namePos;
+    while ((pos = def.find("'", pos)) != std::string::npos) {
+        size_t end = def.find("'", pos + 1);
+        if (end == std::string::npos) break;
+        std::string n = def.substr(pos + 1, end - pos - 1);
+        if (!n.empty()) out.push_back(n);
+        pos = end + 1;
+    }
+    return out;
+}
+
 AttrSchemaInfo loadAttrSchema(LDAPConn &conn) {
     AttrSchemaInfo info;
     auto rootDSE = conn.searchOne("", "(objectClass=*)", {"subschemaSubentry"}, false);
     std::string subschemaDN = rootDSE.getAttr("subschemaSubentry");
     if (subschemaDN.empty()) return info;
-    auto subschema = conn.searchOne(subschemaDN, "(objectClass=*)", {"attributeTypes"}, false);
-    auto allDefs = subschema.getAttrs("attributeTypes");
-    for (const auto &def : allDefs) {
-        // NAME may be single- or multi-valued: NAME 'x', NAME ( 'x' 'y' ... )
-        std::string name = parseSchemaName(def);
+    // One subschema query for every schema table (RFC 4512 §4.2): the
+    // attributeTypes feed validation/menu decisions, ldapSyntaxes resolve
+    // SYNTAX OIDs to names, matchingRules/matchingRuleUse tell how values
+    // compare (case sensitivity, substring search).
+    auto subschema = conn.searchOne(subschemaDN, "(objectClass=*)",
+                                    {"attributeTypes", "ldapSyntaxes",
+                                     "matchingRules", "matchingRuleUse"}, false);
+    for (const auto &def : subschema.getAttrs("attributeTypes")) {
+        // Index every alternate NAME (cn + commonName → both lookups work).
+        auto names = schemaAllNames(def);
+        if (names.empty()) continue;
+        std::string equality = schemaKeywordValue(def, "EQUALITY");
+        std::string substr = schemaKeywordValue(def, "SUBSTR");
+        std::string syntax = schemaKeywordValue(def, "SYNTAX");
+        std::string oidVal;
+        auto p = def.find('(');
+        if (p != std::string::npos) {
+            p = def.find_first_not_of(" \t(", p);
+            auto end = def.find_first_of(" \t", p);
+            oidVal = (end == std::string::npos) ? def.substr(p)
+                                                : def.substr(p, end - p);
+        }
+        for (const auto &name : names) {
+            std::string lower;
+            for (char c : name)
+                lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            info.defs[lower] = def;
+            info.equality[lower] = equality;
+            info.substr[lower] = substr;
+            info.syntax[lower] = syntax;
+            info.oid[lower] = oidVal;
+            // An attribute without its own EQUALITY/SYNTAX/SUBSTR inherits
+            // them from its SUP chain (cn SUP name), so record the parent to
+            // resolve those lookups later.
+            std::string sup = schemaKeywordValue(def, "SUP");
+            if (!sup.empty()) info.sup[lower] = sup;
+        }
+    }
+    for (const auto &def : subschema.getAttrs("ldapSyntaxes")) {
+        // ( 1.3.6.1.4.1.1466.115.121.1.15 DESC 'Directory String' )
+        std::string oid = schemaTypeName(def);
+        if (oid.empty()) continue;
+        auto descPos = def.find("DESC ");
+        if (descPos != std::string::npos) {
+            auto q = def.find("'", descPos);
+            if (q != std::string::npos) {
+                auto end = def.find("'", q + 1);
+                if (end != std::string::npos)
+                    info.syntaxDesc[oid] = def.substr(q + 1, end - q - 1);
+            }
+        }
+        if (info.syntaxDesc[oid].empty()) info.syntaxDesc[oid] = oid;
+    }
+    for (const auto &def : subschema.getAttrs("matchingRules")) {
+        std::string name = schemaTypeName(def);
         if (name.empty()) continue;
         std::string lower;
         for (char c : name)
             lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        info.defs[lower] = def;
+        info.matchingRules[lower] = def;
+    }
+    for (const auto &def : subschema.getAttrs("matchingRuleUse")) {
+        // NAME '<matchingRule>' APPLIES ( <attr1> $ <attr2> ... ): the rule
+        // name is the key, the APPLIES list are the attribute types, bare
+        // (no quotes) and $-separated — split exactly like a MUST/MAY list.
+        std::string ruleName = schemaTypeName(def);
+        if (ruleName.empty()) continue;
+        std::string rlower;
+        for (char c : ruleName)
+            rlower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        auto appliesPos = def.find("APPLIES");
+        if (appliesPos == std::string::npos) continue;
+        std::string applies = def.substr(appliesPos + 7);
+        size_t p = 0;
+        while (p <= applies.size()) {
+            size_t dollar = applies.find('$', p);
+            std::string a = applies.substr(p, dollar == std::string::npos
+                                                  ? std::string::npos : dollar - p);
+            a.erase(0, a.find_first_not_of(" \t\r\n()"));
+            a.erase(a.find_last_not_of(" \t\r\n)") + 1);
+            if (!a.empty()) info.matchingRuleUse[rlower].insert(a);
+            if (dollar == std::string::npos) break;
+            p = dollar + 1;
+        }
     }
     return info;
 }
