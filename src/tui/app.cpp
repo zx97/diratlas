@@ -2196,8 +2196,14 @@ void App::appAttrMenu() {
     if (attrSchema_.defs.empty())
         attrSchema_ = loadAttrSchema(*conn_);
 
-    bool multi = parsed && !attrSchema_.singleValue(attrType);
-    bool prot = parsed && attrSchema_.noUserModification(attrType);
+    // Schema lookups use lower-case keys; entry attribute names keep the
+    // server's case, so lower-case the type before the lookup.
+    std::string lowerType;
+    for (char c : attrType)
+        lowerType += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    bool multi = parsed && !attrSchema_.singleValue(lowerType);
+    bool prot = parsed && attrSchema_.noUserModification(lowerType);
 
     // Build the contextual action list (schema-aware).
     std::vector<std::string> actions;
@@ -2257,10 +2263,19 @@ void App::appAttrDuplicateValue() {
     std::string attr = attrs_->getAttrName(sr);
     std::string val = attrs_->getValue(sr);
     if (attr.empty() || val.empty()) { setLog("Duplicate value: nothing to duplicate"); return; }
-    runWriteOp([this, dn, attr, val]() {
-                   return conn_->addAttribute(dn, attr, {val});
+    // "Duplicate" = copy the value as a base for a NEW value: prefill the
+    // form, let the user edit, then add the edited value. Adding the value
+    // unchanged would just fail with "already exists".
+    std::string newVal = val;
+    std::vector<std::pair<std::string, std::string*>> fields = {
+        {"Attribute:", &attr}, {"Value:", &newVal},
+    };
+    if (appPopupForm("Duplicate Value", fields, nullptr) == 0) { setLog("Duplicate value cancelled"); return; }
+    if (newVal.empty()) { setLog("Duplicate value: empty value"); return; }
+    runWriteOp([this, dn, attr, newVal]() {
+                   return conn_->addAttribute(dn, attr, {newVal});
                },
-               "Duplicated value of " + attr, "Duplicate value failed", false, true);
+               "Added " + attr + " = " + newVal.substr(0, 60), "Duplicate value failed", false, true);
 }
 
 void App::appAttrOptions() {
@@ -2534,7 +2549,18 @@ void App::appAddAttr(const std::string &presetName) {
     }
 
     auto allowed = getAllowedAttrs(*conn_, ocs);
-    if (!allowed.empty() && !allowed.count(lower)) {
+    // The schema names keep their case (olcLogLevel, ...), so compare
+    // case-insensitively against the lower-cased type the user typed.
+    bool allowedMatch = false;
+    if (!allowed.empty()) {
+        for (const auto &a : allowed) {
+            std::string al;
+            for (char c : a)
+                al += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (al == lower) { allowedMatch = true; break; }
+        }
+    }
+    if (!allowed.empty() && !allowedMatch) {
         std::string ocList;
         for (size_t i = 0; i < ocs.size(); i++) {
             if (i) ocList += ", ";

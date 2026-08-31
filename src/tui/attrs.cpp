@@ -217,13 +217,15 @@ static void parseMUST(const std::string &ocDef, std::set<std::string> &out) {
         std::string attr = list.substr(p, q - p);
         attr.erase(0, attr.find_first_not_of(" \t\r\n"));
         attr.erase(attr.find_last_not_of(" \t\r\n") + 1);
-        if (!attr.empty()) out.insert(attr);
+        // LDAP names are case-insensitive (RFC 4512): store lower-cased so
+        // callers can compare against lower-cased entry attribute names.
+        if (!attr.empty()) out.insert(lowerName(attr));
         p = q + 1;
     }
     std::string attr = list.substr(p);
     attr.erase(0, attr.find_first_not_of(" \t\r\n"));
     attr.erase(attr.find_last_not_of(" \t\r\n") + 1);
-    if (!attr.empty()) out.insert(attr);
+    if (!attr.empty()) out.insert(lowerName(attr));
 }
 
 /// @brief Extract $ -separated attribute names from a " MAY (...)" list (RFC 4512).
@@ -242,13 +244,15 @@ static void parseMAY(const std::string &ocDef, std::set<std::string> &out) {
         std::string attr = list.substr(p, q - p);
         attr.erase(0, attr.find_first_not_of(" \t\r\n"));
         attr.erase(attr.find_last_not_of(" \t\r\n") + 1);
-        if (!attr.empty()) out.insert(attr);
+        // LDAP names are case-insensitive (RFC 4512): store lower-cased so
+        // callers can compare against lower-cased entry attribute names.
+        if (!attr.empty()) out.insert(lowerName(attr));
         p = q + 1;
     }
     std::string attr = list.substr(p);
     attr.erase(0, attr.find_first_not_of(" \t\r\n"));
     attr.erase(attr.find_last_not_of(" \t\r\n") + 1);
-    if (!attr.empty()) out.insert(attr);
+    if (!attr.empty()) out.insert(lowerName(attr));
 }
 
 /**
@@ -366,7 +370,8 @@ std::set<std::string> getInheritedMandatoryAttrs(LDAPConn &conn,
     while (!cur.empty() && visited.insert(cur).second) {
         bool found = false;
         for (const auto &def : allDefs) {
-            if (parseOCName(def) != cur) continue;
+            // objectClass names are case-insensitive (RFC 4512).
+            if (lowerName(parseOCName(def)) != lowerName(cur)) continue;
             parseMUST(def, result);
             cur = parseSUP(def);
             found = true;
@@ -393,7 +398,8 @@ std::set<std::string> getAllowedAttrs(LDAPConn &conn,
         while (!cur.empty() && visited.insert(cur).second) {
             bool found = false;
             for (const auto &def : allDefs) {
-                if (parseOCName(def) != cur) continue;
+                // objectClass names are case-insensitive (RFC 4512).
+                if (lowerName(parseOCName(def)) != lowerName(cur)) continue;
                 parseMUST(def, result);
                 parseMAY(def, result);
                 cur = parseSUP(def);
@@ -414,7 +420,8 @@ std::string objectClassKind(LDAPConn &conn, const std::string &className) {
     auto subschema = conn.searchOne(subschemaDN, "(objectClass=*)", {"objectClasses"}, false);
     auto allDefs = subschema.getAttrs("objectClasses");
     for (const auto &def : allDefs) {
-        if (parseOCName(def) != className) continue;
+        // objectClass names are case-insensitive (RFC 4512).
+        if (lowerName(parseOCName(def)) != lowerName(className)) continue;
         if (def.find(" STRUCTURAL") != std::string::npos) return "STRUCTURAL";
         if (def.find(" AUXILIARY") != std::string::npos) return "AUXILIARY";
         if (def.find(" ABSTRACT") != std::string::npos) return "ABSTRACT";
@@ -530,7 +537,9 @@ void AttrsWidget::show(const LDAPEntry &entry, const std::set<std::string> &mand
 
         bool op = isOperationalAttr(attrName) ||
                   (attrSchema_ && attrSchema_->operational(lowerName(attrName)));
-        bool mand = mandatory.count(attrName) > 0;
+        // Schema names keep their case (olcLogLevel...); mandatory is stored
+        // lower-cased, so compare the lower-cased entry attribute name.
+        bool mand = mandatory.count(lowerName(attrName)) > 0;
 
         const std::string lower = lowerName(attrName);
         // Base type (RFC 4512 §2.5.2) used for schema/formatting decisions.
