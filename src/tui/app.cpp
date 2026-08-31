@@ -1585,6 +1585,10 @@ void App::showValuePopup(const std::string &title, const std::string &content,
                     // One rule per set of lines, never wrapped: horizontal
                     // scroll reveals what does not fit. drawAclValue skips the
                     // partial first word so colours never shift with hscroll.
+                    // Clear the whole row first: a shorter slice under hscroll
+                    // would otherwise leave stale glyphs from the previous
+                    // render ("frozen" left part while the end scrolls).
+                    mvwhline(stdscr, fy, sx + 1, ' ', cols - 2);
                     std::string seg = lines[i];
                     if (hscroll < static_cast<int>(seg.size()))
                         seg = seg.substr(hscroll);
