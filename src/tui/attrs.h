@@ -153,7 +153,8 @@ AttrSchemaInfo loadAttrSchema(LDAPConn &conn);
  * selectors yellow, quoted DNs green. Shared with the ACL popup renderer.
  */
 void drawAclValue(WINDOW *win, int y, int x, int maxW,
-                  const std::string &val, int defaultColor, attr_t defaultAttr);
+                  const std::string &val, int defaultColor, attr_t defaultAttr,
+                  int skip = 0);
 
 /**
  * @brief Attribute display panel.

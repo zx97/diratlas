@@ -1053,7 +1053,8 @@ std::vector<std::pair<std::string, std::string>> AttrsWidget::getAclValuesMerged
  *   - quoted strings        → green
  */
 void drawAclValue(WINDOW *win, int y, int x, int maxW,
-                  const std::string &val, int defaultColor, attr_t defaultAttr) {
+                  const std::string &val, int defaultColor, attr_t defaultAttr,
+                  int skip) {
     static const std::set<std::string> rights = {
         "read", "write", "manage", "auth", "compare", "search",
         "add", "delete", "disclose", "proxy",
@@ -1078,6 +1079,15 @@ void drawAclValue(WINDOW *win, int y, int x, int maxW,
     };
     size_t i = 0;
     int cx = x;
+    // With horizontal scroll the caller passes the visible slice starting
+    // mid-word; skip the remainder of that first word so a truncated token
+    // (e.g. "owse" from "browse") is never coloured as if it were a keyword.
+    if (skip > 0 && i < val.size()) {
+        size_t e = val.find_first_of(" \t", i);
+        if (e == std::string::npos) e = val.size();
+        size_t consumed = e - i;
+        if (consumed > 0) { cx += static_cast<int>(consumed); i = e; }
+    }
     while (i < val.size() && cx < x + maxW) {
         if (val[i] == ' ' || val[i] == '\t') {
             int ws = 0;

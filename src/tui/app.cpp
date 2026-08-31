@@ -1583,11 +1583,12 @@ void App::showValuePopup(const std::string &title, const std::string &content,
             for (int i = scroll; i < lineEnd && fy < sy + rows - 1; i++, fy++) {
                 if (aclHighlight) {
                     // One rule per set of lines, never wrapped: horizontal
-                    // scroll reveals what does not fit.
+                    // scroll reveals what does not fit. drawAclValue skips the
+                    // partial first word so colours never shift with hscroll.
                     std::string seg = lines[i];
                     if (hscroll < static_cast<int>(seg.size()))
                         seg = seg.substr(hscroll);
-                    drawAclValue(stdscr, fy, sx + 1, cols - 2, seg, CP_ATTR_VALUE, A_NORMAL);
+                    drawAclValue(stdscr, fy, sx + 1, cols - 2, seg, CP_ATTR_VALUE, A_NORMAL, hscroll);
                 } else {
                     mvwaddstr(stdscr, fy, sx + 1, lines[i].c_str());
                 }
