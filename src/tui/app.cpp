@@ -14,6 +14,7 @@
 #include "../ldapcore/dn.h"
 #include "../ldapcore/attrdesc.h"
 #include "../ldapcore/acl.h"
+#include "../ldapcore/utf8.h"
 #include <ncurses.h>
 #include <locale.h>
 #include <langinfo.h>
@@ -1502,18 +1503,33 @@ void App::showValuePopup(const std::string &title, const std::string &content,
         int cols = std::min(COLS - 4, 130);
         if (cols < 60) cols = 60;
 
-        // Split content into lines (preserving embedded newlines). Long
-        // physical lines are wrapped to the popup width so nothing is hidden
-        // off-screen; ACL values are pre-formatted per clause and are never
-        // re-wrapped (a rule must stay on its own lines).
+        // Split content into lines (preserving embedded newlines). Long physical
+        // lines are wrapped to the popup width so nothing is hidden off-screen.
+        // ACL clauses are wrapped at word boundaries with the continuation
+        // indented (under the "by " prefix), instead of using horizontal
+        // scroll — wrapped lines keep their syntax colours and never get stuck
+        // at the end of the scroll range.
         const int wrapWidth = cols - 2;
         std::vector<std::string> lines;
         {
+            auto wrapAcl = [&](const std::string &src) {
+                // Leading indentation (e.g. the "      by " prefix) is kept on
+                // every continuation line so the clause structure stays clear.
+                size_t ind = 0;
+                while (ind < src.size() && src[ind] == ' ') ind++;
+                std::string body = src.substr(ind);
+                auto segs = diratlas::ldapcore::utf8Wrap(body, wrapWidth - static_cast<int>(ind));
+                for (size_t k = 0; k < segs.size(); ++k) {
+                    std::string line = (k == 0) ? src.substr(0, ind) + segs[k]
+                                                : std::string(ind, ' ') + segs[k];
+                    lines.push_back(line);
+                }
+            };
             std::string cur;
             auto flush = [&]() {
-                if (aclHighlight) {
-                    lines.push_back(cur);
-                } else {
+                if (aclHighlight)
+                    wrapAcl(cur);
+                else {
                     while (static_cast<int>(cur.size()) > wrapWidth) {
                         lines.push_back(cur.substr(0, wrapWidth));
                         cur.erase(0, wrapWidth);
@@ -1539,7 +1555,6 @@ void App::showValuePopup(const std::string &title, const std::string &content,
         if (sx < 0) sx = 0;
 
         int scroll = 0;
-        int hscroll = 0;
         int contentH = rows - 3;
         for (;;) {
             // Drop shadow behind the popup so it stands out from the
@@ -1582,15 +1597,13 @@ void App::showValuePopup(const std::string &title, const std::string &content,
             int lineEnd = std::min<int>(static_cast<int>(lines.size()), scroll + contentH);
             for (int i = scroll; i < lineEnd && fy < sy + rows - 1; i++, fy++) {
                 if (aclHighlight) {
-                    // One rule per set of lines, never wrapped: horizontal
-                    // scroll reveals what does not fit. The full line is drawn
-                    // with startCol=hscroll so the word straddling the scroll
-                    // position is coloured in full (never a truncated token).
-                    // Clear the row first so a shorter visible slice does not
-                    // leave stale glyphs from the previous render.
+                    // Wrapped clause lines are drawn with syntax colours; the
+                    // wrap keeps every word intact so colouring is always
+                    // correct. Clear the row first (drawAclValue writes only
+                    // the visible characters).
                     mvwhline(stdscr, fy, sx + 1, ' ', cols - 2);
                     drawAclValue(stdscr, fy, sx + 1, cols - 2, lines[i],
-                                 CP_ATTR_VALUE, A_NORMAL, hscroll);
+                                 CP_ATTR_VALUE, A_NORMAL);
                 } else {
                     mvwaddstr(stdscr, fy, sx + 1, lines[i].c_str());
                 }
@@ -1604,10 +1617,7 @@ void App::showValuePopup(const std::string &title, const std::string &content,
                 hints += "   [Enter Edit]  F2=edit";
             }
             if (aclHighlight) {
-                bool wide = false;
-                for (const auto &l : lines)
-                    if (static_cast<int>(l.size()) > cols - 2) { wide = true; break; }
-                if (wide) hints += "   \u2190/\u2192=hscroll";
+                // Lines are fully wrapped (no horizontal scroll).
             }
             if (static_cast<int>(lines.size()) > contentH)
                 hints += "   Up/Dn=scroll  (" + std::to_string(scroll + 1) + "-" +
@@ -1630,34 +1640,6 @@ void App::showValuePopup(const std::string &title, const std::string &content,
             if (ch == KEY_HOME) scroll = 0;
             if (ch == KEY_END)
                 scroll = std::max(0, static_cast<int>(lines.size()) - contentH);
-            if (aclHighlight) {
-                int maxH = 0;
-                for (const auto &l : lines)
-                    if (static_cast<int>(l.size()) > maxH) maxH = static_cast<int>(l.size());
-                maxH = std::max(0, maxH - (cols - 2));
-                // Snap to the next word boundary of the longest line: the
-                // short lines (a "to" clause) end early, so their spaces must
-                // not constrain the snap — otherwise the long "by ..." lines
-                // would still be cut mid-word and mis-coloured.
-                const std::string &snapLine = lines.empty() ? "" : *std::max_element(
-                    lines.begin(), lines.end(),
-                    [](const std::string &a, const std::string &b) {
-                        return a.size() < b.size();
-                    });
-                auto snap = [&](int pos) {
-                    if (pos <= 0) return 0;
-                    size_t best = std::string::npos;
-                    for (size_t k = 1; k < snapLine.size(); ++k)
-                        if (snapLine[k] == ' ' && static_cast<int>(k) >= pos) {
-                            best = k + 1; break;
-                        }
-                    return (best == std::string::npos) ? pos : static_cast<int>(best);
-                };
-                if (ch == KEY_LEFT && hscroll > 0) hscroll = snap(hscroll - 8);
-                if (ch == KEY_RIGHT && hscroll < maxH) hscroll = snap(hscroll + 8);
-                if (ch == KEY_HOME) hscroll = 0;
-                if (ch == KEY_END) hscroll = maxH;
-            }
             // Save the report to a file (ACL popups offer a full report).
             if (!saveContent.empty() && (ch == 's' || ch == 'S')) {
                 for (int n = 1;; ++n) {
