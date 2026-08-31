@@ -864,7 +864,7 @@ static bool isSchemaLikeAttr(const std::string &name) {
         "ditcontentrules", "ditstructurerules", "structuralobjectclass",
         "governingstructurerule", "dependson",
         "pwdcheckmodulearg",
-        "aci", "orclentrylevelaci",
+        "aci", "orclaci", "orclentrylevelaci",
     };
     return s.count(name) > 0;
 }
@@ -1018,13 +1018,15 @@ static void drawSchemaValue(WINDOW *win, int y, int x, int maxW,
  * @brief Whether @p name is an ACL-bearing attribute rendered by drawAclValue.
  */
 static bool isAclAttr(const std::string &name) {
-    return name == "olcaccess" || name == "aci" || name == "orclentrylevelaci" ||
+    return name == "olcaccess" || name == "aci" || name == "orclaci" ||
+           name == "orclentrylevelaci" ||
            name == "entryaci" || name == "prescriptiveaci" || name == "subentryaci" ||
            name == "acientry" || name == "ibm-aci";
 }
 
 /**
- * @brief Syntax-highlight an ACL value (olcAccess / aci / orclentrylevelaci).
+ * @brief Syntax-highlight an ACL value (olcAccess / aci / orclaci /
+ *        orclentrylevelaci).
  *
  * Semantic colours:
  *   - "to" / "by" keywords  → bold dark red
@@ -1554,8 +1556,14 @@ bool AttrsWidget::handleKey(int ch) {
                 goToDN_ = "VIEWFULL:" + rows_[selected_].name + "|" + (rawIsText ? val : disp);
                 return true;
             }
-            // If value looks like a DN, load that entry
-            if (val.find('=') != std::string::npos && val.find(',') != std::string::npos) {
+            // If value looks like a DN, load that entry. ACL/ACI values (access to
+            // ..., (target...) may contain '=' and ',' in DNs but are not DNs;
+            // the structured ACL popup handles them when isAclAttr matched, so
+            // this fallback must never treat them as a DN.
+            if (val.find('=') != std::string::npos && val.find(',') != std::string::npos &&
+                val.find("access to") == std::string::npos &&
+                val.find("(target") == std::string::npos &&
+                val.find("(version") == std::string::npos) {
                 goToDN_ = val;
                 return true;
             }

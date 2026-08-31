@@ -803,8 +803,41 @@ void App::drawLogBar() {
         line = hints;
     if (static_cast<int>(line.size()) > getmaxx(logWin_))
         line = line.substr(line.size() - getmaxx(logWin_));
+
+    // Error / warning detection: the message drives the bar colour so a
+    // failure stands out instead of blending in with the hints. Errors blink
+    // in light red, warnings are steady yellow.
+    std::string low = log_;
+    for (auto &c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    bool isErr = low.find("rejected") != std::string::npos ||
+                 low.find("failed") != std::string::npos ||
+                 low.find("cannot") != std::string::npos ||
+                 low.find("required") != std::string::npos ||
+                 low.find("not allowed") != std::string::npos ||
+                 low.find("no actions") != std::string::npos ||
+                 low.find("nothing to duplicate") != std::string::npos ||
+                 low.find("select an entry first") != std::string::npos ||
+                 low.find("position cursor") != std::string::npos ||
+                 low.find("no parent") != std::string::npos ||
+                 low.find("error") != std::string::npos ||
+                 low.find("empty value") != std::string::npos;
+    bool isWarn = low.find("warning") != std::string::npos ||
+                  low.find("will require") != std::string::npos ||
+                  low.find("cancelled") != std::string::npos ||
+                  low.find("cancel") != std::string::npos;
+
+    int color = CP_LOG;
+    attr_t attr = A_NORMAL;
+    if (isErr) {
+        color = CP_STATUS_ERR;
+        attr = A_BOLD | A_BLINK;
+    } else if (isWarn) {
+        color = CP_STATUS_WARN;
+        attr = A_BOLD;
+    }
+    wattron(logWin_, COLOR_PAIR(color) | attr);
     mvwaddstr(logWin_, 0, 0, line.c_str());
-    wattroff(logWin_, COLOR_PAIR(CP_LOG));
+    wattroff(logWin_, COLOR_PAIR(color) | attr);
 }
 
 void App::handleKey(int ch) {
