@@ -1059,6 +1059,8 @@ void drawAclValue(WINDOW *win, int y, int x, int maxW,
         "add", "delete", "disclose", "proxy",
         // Oracle OID flags (independent grants/denials)
         "browse", "selfwrite", "export", "import",
+        // ACI shorthand (389 DS / Red Hat / OpenDS / OpenDJ)
+        "all",
     };
     static const std::set<std::string> selectors = {
         "dn", "dn.base", "dn.exact", "dn.one", "dn.subtree", "dn.children",
@@ -1068,6 +1070,11 @@ void drawAclValue(WINDOW *win, int y, int x, int maxW,
         "target", "targetattr", "targetfilter", "targetscope", "targattrfilters",
         "userdn", "groupdn", "userattr", "roledn", "dns", "authmethod",
         "allow", "deny",
+        // ACI bind-rule keywords and boolean operators (389 DS / Red Hat)
+        "ip", "ssf", "dayofweek", "timeofday", "parent", "tree",
+        "and", "or", "not",
+        // ACI header words
+        "version", "acl",
     };
     size_t i = 0;
     int cx = x;
